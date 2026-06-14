@@ -1,0 +1,13 @@
+{
+  "id": "prop-promote-semantic-minority",
+  "provenance": [
+    "metric:semantic_minority_survival_rate",
+    "run:20260615T000000Z-000"
+  ],
+  "evidence": { "support_runs": 12 },
+  "changes": {
+    "protected_metrics": {
+      "semantic_minority_survival_rate": { "method": "repeated_runs", "runs": 5, "tolerance": 0.02 }
+    }
+  }
+}

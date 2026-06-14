@@ -1,0 +1,2 @@
+Sure, here are my points:
+[{"kind":"insight","content":"Emit per-stage latency metrics to find the real bottleneck."}]

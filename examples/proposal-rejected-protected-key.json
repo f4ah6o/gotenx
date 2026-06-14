@@ -1,0 +1,13 @@
+{
+  "id": "prop-loosen-tolerance",
+  "provenance": [
+    "metric:panel_insight_survival_rate",
+    "run:20260615T000000Z-000"
+  ],
+  "evidence": { "support_runs": 9 },
+  "changes": {
+    "protected_metrics": {
+      "panel_insight_survival_rate": { "method": "repeated_runs", "runs": 5, "tolerance": 0.2 }
+    }
+  }
+}

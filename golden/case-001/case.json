@@ -1,0 +1,10 @@
+{
+  "id": "case-001-clean-synthesis",
+  "mode": "replay",
+  "task": "Reduce p95 latency of the checkout API without changing its contract.",
+  "expected": {
+    "panel_insight_survival_rate": 0.9,
+    "insight_adoption": 0.9,
+    "configured_diversity_index": 1.0
+  }
+}

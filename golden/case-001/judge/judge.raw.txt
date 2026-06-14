@@ -1,0 +1,5 @@
+[
+  {"content": "Introduce a read-through cache on the catalog path.", "source_ids": ["claude:insight:001"]},
+  {"content": "Add the covering index and guard cache staleness with a short TTL.", "source_ids": ["claude:insight:002", "codex:blindspot:001"]},
+  {"content": "Instrument per-stage latency before and after the change.", "source_ids": ["opencode:insight:001"]}
+]

@@ -1,0 +1,9 @@
+{
+  "name": "gotenx",
+  "version": "1.2.0",
+  "description": "Deterministic Panel -> Judge -> Eval -> Proposal pipeline with Goodhart-hardened metrics (Gotenx v1.2 Frozen Baseline, P1-P24).",
+  "author": {
+    "name": "Gotenx"
+  },
+  "keywords": ["panel", "judge", "eval", "provenance", "deterministic-metrics", "optimizer"]
+}

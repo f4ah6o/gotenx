@@ -1,0 +1,6 @@
+[
+  {"content": "Reset the database between cases.", "source_ids": ["claude:insight:002"]},
+  {"content": "Fix fixture setup ordering.", "source_ids": ["claude:insight:001"]},
+  {"content": "Freeze the clock in time-based tests.", "source_ids": ["codex:blindspot:001"]},
+  {"content": "Stub all network calls.", "source_ids": ["opencode:insight:001"]}
+]

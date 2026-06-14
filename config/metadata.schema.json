@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "gotenx.config.metadata.v1",
+  "title": "Gotenx run metadata (P18)",
+  "type": "object",
+  "required": ["run_id", "mode", "status", "panels", "warnings"],
+  "additionalProperties": true,
+  "properties": {
+    "run_id": { "type": "string" },
+    "mode": {
+      "type": "string",
+      "enum": ["run", "eval", "replay"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "blocked", "error", "human_override"]
+    },
+    "panels": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "human_override": { "type": "boolean" },
+    "overridden_items": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

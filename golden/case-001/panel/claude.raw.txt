@@ -1,0 +1,1 @@
+[{"kind":"insight","content":"Cache the product catalog read path."},{"kind":"insight","content":"Add a covering index on orders(user_id, created_at)."}]

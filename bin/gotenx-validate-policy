@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""PostToolUse hook: validate a Gotenx policy.json after it is edited.
+
+Reads the hook payload from stdin. If the edited file looks like a Gotenx
+policy (schema_version gotenx.config.policy.v2, or path ends in
+.gotenx/policy.json), validate it and surface problems as a non-blocking
+warning. Anything else is ignored. Never blocks the edit.
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(PLUGIN_ROOT))
+
+
+def main() -> int:
+    try:
+        payload = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        return 0
+    tool_input = payload.get("tool_input", {})
+    file_path = tool_input.get("file_path") or tool_input.get("filePath")
+    if not file_path:
+        return 0
+    p = Path(file_path)
+    if p.name != "policy.json":
+        return 0
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError):
+        return 0
+    if data.get("schema_version") != "gotenx.config.policy.v2":
+        return 0
+
+    from gotenx import policy as policy_mod  # noqa: E402
+
+    problems = policy_mod.validate(p)
+    if problems:
+        msg = "Gotenx policy validation problems:\n  - " + "\n  - ".join(problems)
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": msg
+            }
+        }))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

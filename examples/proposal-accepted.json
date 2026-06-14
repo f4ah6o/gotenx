@@ -1,0 +1,14 @@
+{
+  "id": "prop-judge-source-codex",
+  "provenance": [
+    "metric:panel_insight_survival_rate",
+    "run:20260615T000000Z-000"
+  ],
+  "evidence": {
+    "support_runs": 4,
+    "rationale": "Trialing codex as Judge; survival held across the support window."
+  },
+  "changes": {
+    "judge": { "source": "codex" }
+  }
+}

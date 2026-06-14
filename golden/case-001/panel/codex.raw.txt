@@ -1,0 +1,3 @@
+```json
+[{"kind":"blindspot","content":"No rollback path if the cache returns stale prices."}]
+```

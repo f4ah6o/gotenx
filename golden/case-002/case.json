@@ -1,0 +1,10 @@
+{
+  "id": "case-002-full-attribution",
+  "mode": "replay",
+  "task": "Triage flaky integration tests and propose a stabilization plan.",
+  "expected": {
+    "panel_insight_survival_rate": 0.9,
+    "single_attribution_acted_on": 0.9,
+    "configured_diversity_index": 1.0
+  }
+}

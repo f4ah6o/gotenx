@@ -1,0 +1,1 @@
+[{"kind":"insight","content":"Network calls are not stubbed in two suites."}]

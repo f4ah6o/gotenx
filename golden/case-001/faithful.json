@@ -1,0 +1,5 @@
+{"verdicts": [
+  {"judge_id": "judge:plan:001", "faithful": true},
+  {"judge_id": "judge:plan:002", "faithful": true},
+  {"judge_id": "judge:plan:003", "faithful": true}
+]}

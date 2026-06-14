@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Entry point for the bundled gotenx CLI.
+
+Adds the plugin root to sys.path so the ``gotenx`` package imports without an
+install step, then dispatches to the CLI. ``CLAUDE_PLUGIN_ROOT`` is honoured for
+locating bundled config/golden when running inside Claude Code.
+"""
+import os
+import sys
+from pathlib import Path
+
+PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(PLUGIN_ROOT))
+
+from gotenx.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main())

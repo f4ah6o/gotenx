@@ -1,0 +1,1 @@
+[{"kind":"insight","content":"Retries mask an ordering bug in fixture setup."},{"kind":"insight","content":"The shared DB is not reset between cases."}]

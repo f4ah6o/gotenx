@@ -1,0 +1,50 @@
+{
+  "schema_version": "gotenx.config.policy.v2",
+
+  "protected_metrics": {
+    "panel_insight_survival_rate": {
+      "method": "repeated_runs",
+      "runs": 5,
+      "tolerance": 0.02
+    },
+    "configured_diversity_index": {
+      "method": "static_config",
+      "tolerance": 0
+    }
+  },
+
+  "protected_policy_keys": [
+    "protected_metrics",
+    "protected_policy_keys",
+    "structural_invariants"
+  ],
+
+  "structural_invariants": [
+    "judge_provenance_policy",
+    "no_proposal_metric_promotion"
+  ],
+
+  "future_candidate_metrics": [
+    {
+      "name": "semantic_minority_survival_rate",
+      "status": "unratified",
+      "gating": false,
+      "note": "Requires Eval-layer or clustering definition. Until ratified, never protected, never gating."
+    }
+  ],
+
+  "panel": {
+    "sources": ["claude", "codex", "opencode"]
+  },
+
+  "judge": {
+    "source": "claude"
+  },
+
+  "eval": {
+    "provenance_faithful": {
+      "sample_k": 5,
+      "threshold": 0.90
+    }
+  }
+}
