@@ -1,109 +1,237 @@
-# Gotenx — Claude Code Plugin
+# Gotenx — Claude Code プラグイン
 
-> # Gotenx Specification v1.2
-> **Status: Frozen Baseline** · Supersedes v1.1 + Freeze Patches 1–3 (folded in)
->
-> Freeze means: this version is closed and immutable. It does **not** mean every
-> question is answered. The open items below are acknowledged limitations of the
-> frozen baseline, not defects to be patched into v1.2.
+**Gotenx は「複数の AI に意見を出させ、1 つの計画にまとめ、その計画が元の意見を
+ちゃんと使っているかを“ごまかせない指標”で測る」ためのパイプラインです。**
+Claude Code のプラグインとして動きます。
 
-A deterministic **Panel → Judge → Eval → Proposal** pipeline with
-Goodhart-hardened metrics, packaged as a Claude Code plugin. A panel of analyst
-CLIs (`claude` / `codex` / `opencode`) each emit insights; a Judge synthesizes a
-plan citing them; metrics are computed **purely from the ID provenance graph**;
-an Eval layer gates change proposals against protected metrics and structural
-invariants before they can be applied.
+- 🧩 複数の分析役 CLI（`claude` / `codex` / `opencode`）が **インサイト（気づき）** を出す（= Panel）
+- ⚖️ Judge（裁定役）がそれらを引用しながら 1 つの **計画** に統合する（= Judge）
+- 📊 「どのインサイトが計画に採用されたか」を **来歴（provenance）グラフ** から計算して指標化する
+- ✅ Eval が指標を検証し、設定変更の **提案（Proposal）** を“劣化させない”範囲でだけ許可する
 
-## Design principle
+---
 
-Metrics are a pure function of the provenance graph (P1/P10) — never text
-matching. The one place LLM judgement is needed (`provenance_faithful`) is
-confined to the Eval layer and **sampled** (P11/P23), so the metric layer stays
-fully deterministic. IDs (`<source>:<kind>:<seq>`, P9) are assigned by gotenx,
-never by the models, so the graph cannot be forged.
+## 何の問題を解くのか
 
-## Install (local dev)
+AI に「良い計画かどうか」を測らせると、たいてい **テキストの一致**（キーワードが入っているか等）で
+判定しがちです。しかしテキスト照合の指標は **Goodhart の法則** — 「指標が目標になると、その指標は
+良い指標でなくなる」— に弱く、モデルが指標に合わせて文章を盛るだけで“ごまかせて”しまいます。
+
+Gotenx の答えはシンプルです。**指標は来歴グラフだけから計算する。テキストは一切見ない。**
+
+- Panel が出した各インサイトには、gotenx が **ID**（`<source>:<kind>:<seq>`、例 `claude:insight:001`）を
+  振ります。**ID を振るのは gotenx だけで、モデルには振らせません。** だからグラフを偽造できません。
+- Judge は計画の各項目に「どのインサイト ID を根拠にしたか」（`source_ids`）を書きます。
+- 指標は「参照された ID / 全 ID」のような **純粋な計算** になります（[`gotenx/metrics.py`](gotenx/metrics.py)）。
+
+LLM の主観的判断が必要になる箇所（引用が本当に誠実か＝`provenance_faithful`）は **Eval 層に隔離し、
+かつサンプリング** で確認します。これにより指標層は完全に決定的（同じグラフ → 必ず同じ数値）に保たれます。
+
+---
+
+## しくみ（Panel → Judge → Eval → Proposal）
+
+```
+タスク
+  │
+  ▼
+┌─────────┐   各分析役がインサイトを出す
+│  Panel  │   gotenx が ID を付与 (claude:insight:001 ...)
+└────┬────┘   → gotenx/panel.py
+     ▼
+┌─────────┐   ID を引用しながら 1 つの計画へ統合
+│  Judge  │   各計画項目に source_ids を記録
+└────┬────┘   → gotenx/judge.py
+     ▼
+┌──────────────┐  ID のつながりだけでグラフを構築
+│ Provenance   │  （参照された ID / 宙ぶらりんの ID）
+│   Graph      │  → gotenx/provenance.py
+└──────┬───────┘
+       ▼
+┌─────────┐   グラフから指標を“純粋計算”
+│ Metrics │   → gotenx/metrics.py
+└────┬────┘
+     ▼
+┌─────────┐   ゴールデンケースで反復実行し、保護指標・基準値・誠実性を検証
+│  Eval   │   → gotenx/evalrun.py
+└────┬────┘
+     ▼
+┌──────────┐  設定変更の提案を検証 → Eval → 適用（基準値をラチェット）
+│ Proposal │  → gotenx/proposal.py
+└──────────┘
+```
+
+1. **Panel** — 設定された分析役 CLI を headless で呼び、返ってきた各インサイトに ID を振る。
+2. **Judge** — 全インサイト（ID 付き）を渡し、`source_ids` 付きの計画項目を受け取る。引用先 ID が
+   壊れている場合は警告して落とす（黙って残さない）。
+3. **Provenance Graph** — Panel の ID と Judge の `source_ids` を結び、参照済み ID / 宙ぶらりんの ID を持つ
+   グラフにする。
+4. **Metrics** — グラフ上の純粋関数として 5 つの指標を計算（後述）。
+5. **Eval / Proposal** — 既存設定を劣化させない範囲でのみ設定変更を許可する（後述のガードレール）。
+
+実行結果は、利用先プロジェクトの `.gotenx/runs/<run_id>/` に保存されます
+（このプラグインのリポジトリではなく、`$CLAUDE_PROJECT_DIR` か cwd 側）。
+
+---
+
+## クイックスタート
+
+LLM が無くても動く **決定的なウォークスルー**（ゴールデンケースの録画フィクスチャを再生）です。
+依存は Python 3 標準ライブラリのみ。
 
 ```bash
+# 1) プラグインとしてインストール（Claude Code から使う場合）
 claude --plugin-dir /path/to/gotenx
+
+# 2) CLI で直接試す（LLM 不要、すべて決定的）
+bin/gotenx init                              # .gotenx/ を作り、正準 policy.json を配置
+bin/gotenx run --replay golden/case-001      # Panel→Judge→指標 を録画フィクスチャで再生
+bin/gotenx eval                              # ゴールデンスイートを反復実行して検証
+bin/gotenx status                            # 適用中ポリシー / epoch / 基準値 / 最近の run
 ```
 
-## Slash commands
+`run` の出力例（抜粋）— 指標は来歴グラフから計算された純粋な数値です:
 
-| Command | What it does |
+```json
+{
+  "run_id": "…Z-000",
+  "metrics": {
+    "panel_insight_survival_rate": 1.0,
+    "insight_adoption": 1.0,
+    "single_attribution_acted_on": 0.666…,
+    "observed_diversity_index": 1.0,
+    "configured_diversity_index": 1.0
+  },
+  "metadata": { "panels": ["claude","codex","opencode"], "warnings": [] }
+}
+```
+
+実際の LLM を使って動かすには `--replay` を外します（`bin/gotenx run --task "…"`）。その場合は
+`claude` / `codex` / `opencode` CLI が利用可能である必要があります。
+
+---
+
+## スラッシュコマンド
+
+スラッシュコマンドはすべて `bin/gotenx`（決定的なコア）の薄いラッパーです。
+
+| コマンド | 内容 |
 |---|---|
-| `/gotenx:init` | Create `.gotenx/`, install canonical `policy.json`, seed baseline |
-| `/gotenx:run <task>` | One panel → judge → metrics cycle (add `--replay <dir>` for fixtures) |
-| `/gotenx:eval` | Run the golden suite (repeated runs, per-case failures, actuals) |
-| `/gotenx:propose <p.json>` | Validate a proposal, then Eval the candidate effective config |
-| `/gotenx:apply <p.json>` | Apply a validated, eval-passing proposal; ratchet baseline |
-| `/gotenx:status` | Show applied policy, epoch, baseline, recent runs |
+| `/gotenx:init` | `.gotenx/` を作成し、正準 `policy.json` を設置、基準値を初期化 |
+| `/gotenx:run <task>` | Panel → Judge → 指標 を 1 サイクル実行（`--replay <dir>` でフィクスチャ再生） |
+| `/gotenx:eval` | ゴールデンスイートを実行（反復実行・ケース別の合否・実測値） |
+| `/gotenx:propose <p.json>` | 提案を検証し、候補となる実効設定を Eval にかける |
+| `/gotenx:apply <p.json>` | 検証と Eval を通った提案を適用し、基準値をラチェット |
+| `/gotenx:status` | 適用中ポリシー・epoch・基準値・最近の run を表示 |
 
-## CLI (the deterministic core)
+---
 
-`bin/gotenx` is a stdlib-only Python CLI; the slash commands are thin wrappers.
+## 概念 / 用語集
 
-```bash
-bin/gotenx init
-bin/gotenx run --replay golden/case-001
-bin/gotenx eval
-bin/gotenx propose examples/proposal-accepted.json
-bin/gotenx apply   examples/proposal-accepted.json
-bin/gotenx status
+README を読み進めるための最小限の用語です。仕様の厳密な定義は [`docs/`](docs/) を参照。
+
+| 用語 | 平たく言うと |
+|---|---|
+| **来歴グラフ（provenance graph）** | 「Panel のインサイト ID」と「Judge が引用した `source_ids`」を結んだ ID のつながり。すべての指標はこれだけから計算される（[`gotenx/provenance.py`](gotenx/provenance.py)）。 |
+| **Goodhart 耐性（hardened）** | 指標を目標にしても壊れにくいこと。ID を gotenx が振り、テキストではなくグラフで測ることで、文章を盛るだけのごまかしを防ぐ。 |
+| **保護指標（protected metric）** | 提案の合否を決める“門番”の指標。基準値（floor）を持ち、それを下回る変更は通さない。 |
+| **構造不変条件（structural invariant）** | 提案が決して弱めてはならない名前付きの取り決め（例 `judge_provenance_policy` / `no_proposal_metric_promotion`）。 |
+| **基準値ラチェット（baseline ratchet）** | 適用が成功するたびに基準値を `実測の最小値 − 許容幅` へ更新する。単調増加で、決して下がらない。ノイズで門番が暴れないようヒステリシスを持たせる。 |
+| **epoch** | 適用ごとに +1 される世代番号。古い epoch を前提に評価された提案は無効化され、再評価が要る。 |
+| **future_candidate_metric** | まだ正式採用していない“候補”の指標。非保護・非ゲートで、オプティマイザが勝手に保護指標へ昇格させることはできない（昇格は仕様改訂でのみ）。 |
+| **provenance_faithful** | Judge の引用が誠実かを問う、Eval 層だけのサンプリング検査。LLM 判断が入る唯一の箇所で、しきい値（既定 0.90）で確認する。 |
+
+---
+
+## 指標（すべて決定的）
+
+| 指標 | 意味 | 備考 |
+|---|---|---|
+| `panel_insight_survival_rate` | 参照された Panel ID / 全 Panel ID | **保護指標**（基準値あり） |
+| `single_attribution_acted_on` | `source_id` をちょうど 1 つだけ持つ Judge 項目の割合 | |
+| `insight_adoption` | 1 つ以上の Panel インサイトに根拠を持つ Judge 項目の割合 | |
+| `observed_diversity_index` | 参照されたインサイトに現れた発信元の多様性（実測） | 保護しない |
+| `configured_diversity_index` | 設定された Panel 発信元の多様性（静的設定ベース） | **保護指標** |
+
+> 多様性指標は「実測（observed）」と「設定（configured）」を分けてあり、保護するのは設定側だけです。
+> 実測側を保護対象にすることは禁止されています。
+
+---
+
+## ガードレール
+
+提案（設定変更）は、適用される前に複数の門を通ります。
+
+- **保護ポリシーキー / 構造不変条件** — これらに触れる提案は Eval 以前に却下される。
+- **`no_proposal_metric_promotion`** — オプティマイザは候補指標を保護指標へ昇格できない。昇格は
+  仕様改訂のみが行える。
+- **基準値ラチェット** — floor = `実測 − 許容幅`。単調増加で下がらない。
+- **逐次適用** — 適用ごとに epoch が進み、古い epoch で評価された提案は無効になる。
+
+サンプルの提案は [`examples/`](examples/) にあります（[受理される例](examples/proposal-accepted.json) /
+[昇格を試みて却下される例](examples/proposal-rejected-promotion.json) /
+[保護キーに触れて却下される例](examples/proposal-rejected-protected-key.json)）。
+
+---
+
+## ディレクトリ構成
+
+```
+.claude-plugin/plugin.json   プラグインのマニフェスト
+commands/*.md                スラッシュコマンド定義（bin/gotenx を呼ぶ）
+agents/gotenx-judge.md        Judge サブエージェント（来歴に忠実な統合）
+hooks/hooks.json              PostToolUse フック（policy.json 編集時に検証）
+bin/gotenx                    決定的な CLI 本体
+bin/gotenx-validate-policy    フック本体：編集された policy.json を検証
+gotenx/                       Python パッケージ（ids, provenance, metrics, eval …）
+config/policy.json            正準ポリシー（schema: gotenx.config.policy.v2）
+golden/case-*/                検証用のゴールデンケース（再生フィクスチャ）
+examples/*.json               サンプル提案（受理 / 却下）
+docs/                         仕様（spec.md と patch1-3.md）
+tests/                        unittest スイート
 ```
 
-## Layout
+利用先プロジェクトの **実行時の状態**は `<project>/.gotenx/` に置かれます
+（適用済み `policy.json`、`baseline.json`、`runs/<run_id>/`、`proposals/`）。このプラグインの
+リポジトリ自体には書き込みません。
 
-```
-.claude-plugin/plugin.json   manifest
-commands/*.md                slash commands -> bin/gotenx
-agents/gotenx-judge.md       Judge subagent (provenance-faithful synthesis)
-bin/gotenx                   deterministic CLI entrypoint
-bin/gotenx-validate-policy   PostToolUse hook: validate edited policy.json
-gotenx/                      Python package (ids, provenance, metrics, eval, ...)
-config/policy.json           canonical gotenx.config.policy.v2
-golden/case-*/               known-good eval cases (replay fixtures)
-examples/*.json              sample proposals (accepted / rejected)
-tests/                       unittest suite
-```
+---
 
-Runtime state lives in `.gotenx/` in the project (applied `policy.json`,
-`baseline.json`, `runs/<run_id>/`, `proposals/`).
-
-## Metrics (deterministic)
-
-- `panel_insight_survival_rate` — referenced panel ids / all panel ids (**protected** floor, P10)
-- `single_attribution_acted_on` — judge items with exactly one `source_id` (P10)
-- `insight_adoption` — judge items grounded in ≥1 panel insight
-- `observed_diversity_index` / `configured_diversity_index` — only the configured one is **protected** (P16)
-
-## Guardrails
-
-- **Protected policy keys / structural invariants** — proposals touching them are rejected before Eval (P5/P17).
-- **`no_proposal_metric_promotion`** — the optimizer can never promote a future-candidate metric into the protected set; only a spec revision may (P22).
-- **Baseline ratchet** — floor = `measured − tolerance`, monotonic (P4/P15).
-- **Sequential apply** — each apply advances an epoch and invalidates proposals evaluated against the old one (P13).
-
-## Tests
+## テスト
 
 ```bash
 python3 -m unittest discover -s tests
 ```
 
-## Known open items (carried, not blocking)
+ビルドや lint のステップはありません（標準ライブラリのみの Python + Markdown のプラグイン資産）。
 
-- **`semantic_minority_survival_rate`** — definition deferred to v1.3+. Survival
-  is currently approximated by the deterministic floor
-  `panel_insight_survival_rate`. It is carried as a non-protected, non-gating,
-  unratified `future_candidate_metric` (P22).
-- **Provenance faithfulness is sampled, not exhaustive** (P23). While an LLM
-  Judge authors `source_ids`, no purely deterministic guarantee of citation
-  faithfulness exists without an added structural-enforcement layer. Raising
-  this ceiling is a v1.3+ architecture question, out of scope for the frozen
-  baseline.
+---
+
+## 仕様と決定性について
+
+Gotenx は **仕様 v1.2「Frozen Baseline」**（凍結ベースライン、P1–P24）の実装です。凍結とは
+「このバージョンは閉じて不変」という意味で、「全ての疑問が解決済み」という意味ではありません。
+下記の未解決項目は、凍結ベースラインが認識している **限界** であって、v1.2 に追加で当てるべき欠陥
+ではありません。
+
+仕様の全文と各ポイント（P◯）の定義は次を参照してください:
+
+- [`docs/spec.md`](docs/spec.md) — 統合版（P22–P24 を含む完全版）
+- [`docs/patch1.md`](docs/patch1.md) — P1–P8
+- [`docs/patch2.md`](docs/patch2.md) — P9–P21
+- [`docs/patch3.md`](docs/patch3.md) — 凍結デルタ
+
+### 既知の未解決項目（持ち越し、ブロッカーではない）
+
+- **`semantic_minority_survival_rate`** — 定義は v1.3 以降へ持ち越し。現状は決定的な floor である
+  `panel_insight_survival_rate` で近似している。非保護・非ゲート・未批准の `future_candidate_metric`
+  として保持（P22）。
+- **来歴の誠実性はサンプリングであり網羅ではない**（P23）。Judge（LLM）が `source_ids` を書く以上、
+  追加の構造的強制層なしに引用の誠実性を完全に決定的へ保証する方法は無い。この上限を引き上げるのは
+  v1.3 以降のアーキテクチャ課題で、凍結ベースラインの範囲外。
 
 ```
-Determinism: 9.8 / 10
-  0.2 gap = provenance faithfulness is sampled, by structural necessity,
-            not by under-specification.
+決定性: 9.8 / 10
+  0.2 の差は、来歴の誠実性がサンプリングであること。
+  これは仕様不足ではなく、構造上の必然による。
 ```
