@@ -10,6 +10,7 @@ Layout, rooted at the project dir (``$CLAUDE_PROJECT_DIR`` or cwd):
         judge.json
         metrics.json
         metadata.json        # P18: run_id, mode, status, panels, warnings
+        usage.json           # real-run operational token usage, when captured
       proposals/<id>.json
 
 run_id is monotonic: ``<UTC-timestamp>-<counter>`` so runs sort chronologically
@@ -103,13 +104,23 @@ def make_metadata(
     return meta
 
 
-def save_run(run_id: str, panel: dict, judge: dict, metrics: dict, metadata: dict,
-             root: Path | None = None) -> Path:
+def save_run(
+    run_id: str,
+    panel: dict,
+    judge: dict,
+    metrics: dict,
+    metadata: dict,
+    root: Path | None = None,
+    *,
+    usage: dict | None = None,
+) -> Path:
     rdir = runs_dir(root) / run_id
     write_json(rdir / "panel.json", panel)
     write_json(rdir / "judge.json", judge)
     write_json(rdir / "metrics.json", metrics)
     write_json(rdir / "metadata.json", metadata)
+    if usage is not None:
+        write_json(rdir / "usage.json", usage)
     return rdir
 
 

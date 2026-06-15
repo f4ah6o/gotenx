@@ -84,8 +84,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     panel = run_panel(policy.panel_sources, args.task or "", transport)
     judge = run_judge(panel, policy.judge_source, transport)
+    panel_usage = panel.pop("usage", None)
+    judge_usage = judge.pop("usage", None)
     graph = build_graph(panel, judge)
     run_metrics = metrics.compute_all(graph, policy.panel_sources)
+    usage = None
+    if mode == "run":
+        usage = {"panel": panel_usage or {}, "judge": judge_usage}
 
     warnings = list(panel.get("warnings", [])) + list(judge.get("warnings", [])) + list(graph.warnings)
     run_id = store.new_run_id()
@@ -97,7 +102,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         warnings=warnings,
         human_override=args.human_override,
     )
-    store.save_run(run_id, panel, judge, run_metrics, metadata)
+    store.save_run(run_id, panel, judge, run_metrics, metadata, usage=usage)
     _emit(
         {"run_id": run_id, "mode": mode, "metrics": run_metrics, "metadata": metadata},
         f"run {run_id}: survival={run_metrics['panel_insight_survival_rate']:.2f} "

@@ -39,10 +39,22 @@ def run_judge(panel: dict, judge_source: str, transport: Transport) -> dict:
     prompt = JUDGE_PROMPT.format(insights=_format_insights(panel))
     warnings: list[str] = []
     try:
-        raw = transport.invoke(judge_source, prompt, slot="judge/judge")
-        parsed = extract_json_array(raw)
+        result = transport.invoke_result(judge_source, prompt, slot="judge/judge")
     except Exception as exc:  # noqa: BLE001
-        return {"items": [], "warnings": [f"judge produced no usable output: {exc}"]}
+        return {
+            "items": [],
+            "warnings": [f"judge produced no usable output: {exc}"],
+            "usage": None,
+        }
+    usage = result.usage
+    try:
+        parsed = extract_json_array(result.raw)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "items": [],
+            "warnings": [f"judge produced no usable output: {exc}"],
+            "usage": usage,
+        }
 
     items: list[dict] = []
     for i, raw_item in enumerate(parsed, start=1):
@@ -60,7 +72,7 @@ def run_judge(panel: dict, judge_source: str, transport: Transport) -> dict:
                 "content": str(raw_item.get("content", "")).strip(),
             }
         )
-    return {"items": items, "warnings": warnings}
+    return {"items": items, "warnings": warnings, "usage": usage}
 
 
 def main() -> None:  # pragma: no cover - convenience for manual use

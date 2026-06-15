@@ -26,6 +26,7 @@ DEFAULT_ADAPTERS: dict[str, dict] = {
     "claude": {
         "argv": ["claude", "-p", "{prompt}", "--output-format", "json"],
         "result_path": "result",
+        "usage_path": "usage",
     },
     "codex": {
         "argv": ["codex", "exec", "{prompt}"],
@@ -36,6 +37,12 @@ DEFAULT_ADAPTERS: dict[str, dict] = {
         "result_path": None,
     },
 }
+
+
+@dataclass(frozen=True)
+class InvokeResult:
+    raw: str
+    usage: dict | None = None
 
 
 @dataclass
@@ -50,8 +57,12 @@ class Transport:
 
         ``slot`` names the fixture file in replay mode (e.g. "panel/claude").
         """
+        return self.invoke_result(source, prompt, slot).raw
+
+    def invoke_result(self, source: str, prompt: str, slot: str) -> InvokeResult:
+        """Return assistant text and provider usage, when available."""
         if self.mode == "replay":
-            return self._replay(slot)
+            return InvokeResult(raw=self._replay(slot))
         return self._real(source, prompt)
 
     # -- replay -----------------------------------------------------------
@@ -68,7 +79,7 @@ class Transport:
         return path.read_text()
 
     # -- real -------------------------------------------------------------
-    def _real(self, source: str, prompt: str) -> str:
+    def _real(self, source: str, prompt: str) -> InvokeResult:
         adapter = self.adapters.get(source)
         if adapter is None:
             raise ValueError(f"no adapter configured for panel source {source!r}")
@@ -85,10 +96,17 @@ class Transport:
         if result_path:
             try:
                 env = json.loads(out)
-                out = env.get(result_path, out)
             except json.JSONDecodeError:
-                pass  # tolerate non-envelope output
-        return out
+                return InvokeResult(raw=out)
+            if not isinstance(env, dict):
+                return InvokeResult(raw=out)
+            result = env.get(result_path)
+            usage = env.get(adapter.get("usage_path", "usage"))
+            return InvokeResult(
+                raw=result if isinstance(result, str) else out,
+                usage=usage if isinstance(usage, dict) else None,
+            )
+        return InvokeResult(raw=out)
 
 
 _ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)

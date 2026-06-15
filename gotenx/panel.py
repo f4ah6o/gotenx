@@ -48,11 +48,17 @@ def run_panel(sources: list[str], task: str, transport: Transport) -> dict:
     insights: list[dict] = []
     warnings: list[str] = []
     contributed: list[str] = []
+    usage: dict[str, dict | None] = {}
     prompt = PANEL_PROMPT.format(task=task)
     for source in sources:
         try:
-            raw = transport.invoke(source, prompt, slot=f"panel/{source}")
-            parsed = extract_json_array(raw)
+            result = transport.invoke_result(source, prompt, slot=f"panel/{source}")
+        except Exception as exc:  # noqa: BLE001 - one source failing must not kill the run
+            warnings.append(f"panel source {source!r} produced no usable output: {exc}")
+            continue
+        usage[source] = result.usage
+        try:
+            parsed = extract_json_array(result.raw)
         except Exception as exc:  # noqa: BLE001 - one source failing must not kill the run
             warnings.append(f"panel source {source!r} produced no usable output: {exc}")
             continue
@@ -60,4 +66,9 @@ def run_panel(sources: list[str], task: str, transport: Transport) -> dict:
         if assigned:
             contributed.append(source)
         insights.extend(assigned)
-    return {"insights": insights, "panels": contributed, "warnings": warnings}
+    return {
+        "insights": insights,
+        "panels": contributed,
+        "warnings": warnings,
+        "usage": usage,
+    }
