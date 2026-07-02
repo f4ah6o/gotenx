@@ -1,5 +1,5 @@
 ---
-description: Run one Gotenx cycle — panel analysts -> Judge synthesis -> deterministic metrics.
+description: Run the cost-aware OpenCode four-stage deliberation pipeline.
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/gotenx:*)
 argument-hint: "<task description>  |  --replay <fixtures-dir>"
 ---
@@ -12,15 +12,14 @@ Run:
 "${CLAUDE_PLUGIN_ROOT}/bin/gotenx" run --task "$ARGUMENTS"
 ```
 
-The panel sources (claude / codex / opencode) are invoked headless; gotenx
-assigns the namespaced insight ids (`<source>:<kind>:<seq>`) — the models never
-supply their own. The Judge synthesizes a plan citing those ids via
-`source_ids`, and metrics are computed from the resulting provenance graph.
+Gotenx invokes DeepSeek V4 Flash (scout), Kimi K2.7 Code (author), DeepSeek V4
+Pro (critic), then GLM-5.2 (judge). OpenCode receives a runtime-enforced
+read-only agent. Gotenx assigns namespaced ids and records per-stage model,
+token usage, and cost.
 
 If the panel CLIs are not available, run deterministically against recorded
 fixtures instead by passing `--replay <dir>` (a directory with `panel/<src>.raw.txt`
-and `judge/judge.raw.txt`).
+and `judge/judge.raw.txt` for legacy v2, or `stages/<stage>.raw.txt` for v3).
 
-From the JSON output, summarize: the `run_id`, the metric set (highlight
-`panel_insight_survival_rate`), which `panels` contributed, and any `warnings`
-(e.g. dangling source_ids — a provenance red flag).
+From the JSON output, summarize the `run_id`, status, metric set, model list,
+total `usage.cost_usd`, contributing panels, warnings, and any blocked failure.

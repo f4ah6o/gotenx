@@ -1,0 +1,1 @@
+[{"kind":"insight","content":"Cache the product catalog read path."}]

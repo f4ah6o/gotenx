@@ -1,5 +1,6 @@
 {
-  "schema_version": "gotenx.config.policy.v2",
+  "schema_version": "gotenx.config.policy.v3",
+  "_baseline_pending": true,
 
   "protected_metrics": {
     "panel_insight_survival_rate": {
@@ -16,12 +17,17 @@
   "protected_policy_keys": [
     "protected_metrics",
     "protected_policy_keys",
-    "structural_invariants"
+    "structural_invariants",
+    "orchestration",
+    "cost_budget",
+    "benchmark"
   ],
 
   "structural_invariants": [
     "judge_provenance_policy",
-    "no_proposal_metric_promotion"
+    "no_proposal_metric_promotion",
+    "ordered_stage_execution",
+    "no_unmetered_run"
   ],
 
   "future_candidate_metrics": [
@@ -39,6 +45,77 @@
 
   "judge": {
     "source": "claude"
+  },
+
+  "orchestration": {
+    "mode": "sequential",
+    "readonly_agent": "gotenx-readonly",
+    "stages": [
+      {
+        "id": "flash",
+        "source": "flash",
+        "role": "scout",
+        "model": "opencode-go/deepseek-v4-flash",
+        "variant": "high",
+        "max_items": 12,
+        "max_content_chars": 800
+      },
+      {
+        "id": "kimi",
+        "source": "kimi",
+        "role": "author",
+        "model": "opencode-go/kimi-k2.7-code",
+        "max_items": 10,
+        "max_content_chars": 800
+      },
+      {
+        "id": "deepseek_pro",
+        "source": "deepseek_pro",
+        "role": "critic",
+        "model": "opencode-go/deepseek-v4-pro",
+        "variant": "high",
+        "max_items": 10,
+        "max_content_chars": 800
+      },
+      {
+        "id": "glm",
+        "source": "judge",
+        "role": "judge",
+        "model": "opencode-go/glm-5.2",
+        "max_items": 12,
+        "max_content_chars": 800
+      }
+    ]
+  },
+
+  "cost_budget": {
+    "reserve_per_run_usd": 0.10,
+    "windows_usd": {"5h": 12.0, "7d": 30.0, "30d": 60.0},
+    "max_baseline_ratio": 0.65,
+    "pricing_snapshot": {
+      "captured_at": "2026-06-18",
+      "unit": "usd_per_million_tokens",
+      "models": {
+        "opencode-go/deepseek-v4-flash": {"input": 0.14, "output": 0.28, "cache_read": 0.0028},
+        "opencode-go/kimi-k2.7-code": {"input": 0.95, "output": 4.0, "cache_read": 0.19},
+        "opencode-go/deepseek-v4-pro": {"input": 1.74, "output": 3.48, "cache_read": 0.0145},
+        "opencode-go/glm-5.2": {"input": 1.4, "output": 4.4, "cache_read": 0.26},
+        "github-copilot/claude-opus-4.6": {"input": 5.0, "output": 25.0, "cache_read": 0.5},
+        "github-copilot/gpt-5.5": {"input": 5.0, "output": 30.0, "cache_read": 0.5}
+      }
+    }
+  },
+
+  "benchmark": {
+    "cases": 60,
+    "noninferiority_margin": 0.10,
+    "confidence": 0.95,
+    "bootstrap_samples": 10000,
+    "seed": 20260618,
+    "baseline_models": [
+      {"id": "github-copilot/claude-opus-4.6", "variant": "high"},
+      {"id": "github-copilot/gpt-5.5", "variant": "high"}
+    ]
   },
 
   "eval": {

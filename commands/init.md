@@ -13,7 +13,10 @@ Run:
 ```
 
 This creates `.gotenx/` (runs/, proposals/), copies the canonical
-`gotenx.config.policy.v2` policy to `.gotenx/policy.json`, and seeds an empty
+`gotenx.config.policy.v3` policy to `.gotenx/policy.json`, and seeds an empty
 baseline. Report the resulting path and any `problems` from the JSON output. If
 `problems` is non-empty, surface them — the policy is invalid and must be fixed
 before running.
+
+An existing v2 workspace is migrated automatically on its next command. The
+old policy and baseline are retained under `.gotenx/migrations/`.

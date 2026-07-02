@@ -27,6 +27,9 @@
     "overridden_items": {
       "type": "array",
       "items": { "type": "string" }
-    }
+    },
+    "models": { "type": "array", "items": { "type": "string" } },
+    "cost_usd": { "type": "number", "minimum": 0 },
+    "failure": { "type": "object" }
   }
 }

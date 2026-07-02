@@ -1,0 +1,5 @@
+[
+  {"kind":"plan","content":"Stub network calls.","source_ids":["flash:insight:001"]},
+  {"kind":"plan","content":"Use a fake clock and seeded scheduler.","source_ids":["kimi:proposal:001"]},
+  {"kind":"plan","content":"Assert retry and timeout boundaries.","source_ids":["deepseek_pro:risk:001"]}
+]

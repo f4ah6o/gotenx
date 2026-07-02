@@ -1,7 +1,7 @@
 {
   "name": "gotenx",
-  "version": "1.2.0",
-  "description": "Deterministic Panel -> Judge -> Eval -> Proposal pipeline with Goodhart-hardened metrics (Gotenx v1.2 Frozen Baseline, P1-P24).",
+  "version": "1.3.0",
+  "description": "Cost-aware four-model OpenCode deliberation with deterministic provenance, evaluation, and proposal gates.",
   "author": {
     "name": "Gotenx"
   },

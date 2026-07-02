@@ -1,0 +1,1 @@
+[{"kind":"risk","content":"Verify retries and timeout boundaries explicitly.","source_ids":["flash:insight:001","kimi:proposal:001"]}]

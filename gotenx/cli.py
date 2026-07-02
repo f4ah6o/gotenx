@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import baseline as baseline_mod
@@ -23,8 +24,11 @@ from . import store
 from .evalrun import eval_suite
 from .judge import run_judge
 from .llm import Transport
+from .orchestrator import run_staged
 from .panel import run_panel
 from .provenance import build_graph
+from . import usage as usage_mod
+from . import benchmark as benchmark_mod
 
 
 def plugin_root() -> Path:
@@ -39,7 +43,19 @@ def _load_applied() -> dict:
     p = store.policy_path()
     if not p.exists():
         raise SystemExit("no applied policy; run `gotenx init` first")
-    return store.read_json(p)
+    applied = store.read_json(p)
+    if applied.get("schema_version") == policy_mod.LEGACY_SCHEMA_VERSION:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = store.migrations_dir() / f"v2-to-v3-{stamp}"
+        store.write_json(backup / "policy.json", applied)
+        old_baseline = _load_baseline()
+        store.write_json(backup / "baseline.json", old_baseline)
+        template = json.loads(template_policy_path().read_text())
+        applied = policy_mod.migrate_v2_dict(applied, template)
+        applied["_baseline_pending"] = True
+        store.write_json_atomic(p, applied)
+        store.write_json_atomic(store.baseline_path(), {})
+    return applied
 
 
 def _load_baseline() -> dict:
@@ -79,36 +95,60 @@ def cmd_run(args: argparse.Namespace) -> int:
         transport = Transport(mode="replay", replay_dir=Path(args.replay))
         mode = "replay"
     else:
-        transport = Transport(mode="real")
+        transport = Transport(mode="real", cwd=store.project_root())
         mode = "run"
 
-    panel = run_panel(policy.panel_sources, args.task or "", transport)
-    judge = run_judge(panel, policy.judge_source, transport)
-    panel_usage = panel.pop("usage", None)
-    judge_usage = judge.pop("usage", None)
+    run_id = store.new_run_id()
+    staged = None
+    legacy_usage = None
+    if policy.uses_staged_orchestration:
+        staged = run_staged(args.task or "", policy, transport)
+        panel = staged["panel"]
+        judge = staged["judge"]
+        configured_sources = [s["source"] for s in policy.stages if s["role"] != "judge"]
+    else:
+        panel = run_panel(policy.panel_sources, args.task or "", transport)
+        judge = run_judge(panel, policy.judge_source, transport)
+        configured_sources = policy.panel_sources
+        panel_usage = panel.pop("usage", None)
+        judge_usage = judge.pop("usage", None)
+        if mode == "run":
+            legacy_usage = {"panel": panel_usage or {}, "judge": judge_usage}
     graph = build_graph(panel, judge)
-    run_metrics = metrics.compute_all(graph, policy.panel_sources)
-    usage = None
-    if mode == "run":
-        usage = {"panel": panel_usage or {}, "judge": judge_usage}
+    run_metrics = metrics.compute_all(graph, configured_sources)
 
     warnings = list(panel.get("warnings", [])) + list(judge.get("warnings", [])) + list(graph.warnings)
-    run_id = store.new_run_id()
+    if staged:
+        status = staged["status"]
+    else:
+        status = "ok"
     metadata = store.make_metadata(
         run_id=run_id,
         mode=mode,
-        status="ok",
+        status=status,
         panels=panel.get("panels", []),
         warnings=warnings,
         human_override=args.human_override,
     )
-    store.save_run(run_id, panel, judge, run_metrics, metadata, usage=usage)
+    if staged:
+        metadata["models"] = [stage["model"] for stage in staged["stages"]]
+        metadata["cost_usd"] = staged["usage"]["cost_usd"]
+        if staged.get("failure"):
+            metadata["failure"] = staged["failure"]
+    store.save_run(
+        run_id, panel, judge, run_metrics, metadata,
+        stages=staged["stages"] if staged else None,
+        usage=staged["usage"] if staged else legacy_usage,
+    )
+    if staged and mode == "run" and staged["usage"]["cost_usd"]:
+        usage_mod.record(run_id, staged["usage"]["cost_usd"])
     _emit(
-        {"run_id": run_id, "mode": mode, "metrics": run_metrics, "metadata": metadata},
+        {"run_id": run_id, "mode": mode, "metrics": run_metrics, "metadata": metadata,
+         "usage": staged["usage"] if staged else legacy_usage},
         f"run {run_id}: survival={run_metrics['panel_insight_survival_rate']:.2f} "
         f"panels={panel.get('panels')} warnings={len(warnings)}",
     )
-    return 0
+    return 0 if status == "ok" else 2
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
@@ -133,6 +173,10 @@ def _eval_candidate(proposal: dict, applied: dict, baseline: dict, golden: Path)
 
 def cmd_propose(args: argparse.Namespace) -> int:
     applied = _load_applied()
+    if applied.get("_baseline_pending"):
+        _emit({"proposal": None, "status": "blocked", "reason": "v3_baseline_pending"},
+              "propose blocked: run and pass the v3 benchmark first")
+        return 2
     policy = policy_mod.from_dict(applied)
     baseline = _load_baseline()
     proposal = store.read_json(Path(args.proposal))
@@ -168,6 +212,10 @@ def _measured_floor(eval_result: dict, policy: policy_mod.Policy) -> dict:
 
 def cmd_apply(args: argparse.Namespace) -> int:
     applied = _load_applied()
+    if applied.get("_baseline_pending"):
+        _emit({"applied": False, "reason": "v3_baseline_pending"},
+              "apply blocked: run and pass the v3 benchmark first")
+        return 2
     policy = policy_mod.from_dict(applied)
     baseline = _load_baseline()
     proposal = store.read_json(Path(args.proposal))
@@ -232,6 +280,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         "baseline": baseline,
         "recent_runs": runs[-5:],
         "policy_problems": problems,
+        "baseline_pending": bool(applied.get("_baseline_pending")),
+        "usage": usage_mod.budget_status(policy),
+        "models": [stage.get("model") for stage in policy.stages],
     }
     _emit(
         result,
@@ -242,15 +293,58 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def _benchmark_cfg(policy) -> dict:
+    cfg = dict(policy.benchmark_cfg)
+    cfg["max_baseline_ratio"] = float(policy.cost_budget.get("max_baseline_ratio", 0.65))
+    return cfg
+
+
+def cmd_benchmark_run(args: argparse.Namespace) -> int:
+    applied = _load_applied()
+    policy = policy_mod.from_dict(applied)
+    suite_dir = Path(args.suite)
+    suite = benchmark_mod.load_suite(suite_dir, int(policy.benchmark_cfg.get("cases", 60)))
+    out_path = Path(args.output or (store.gotenx_dir() / "benchmarks" / "v1-results.json"))
+    result = store.read_json(out_path) if out_path.exists() and args.resume else {"suite": suite.get("id", "v1"), "cases": []}
+    done = {case["id"] for case in result["cases"]}
+    transport = Transport(mode="real", cwd=store.project_root())
+    for case in suite["cases"]:
+        if case["id"] in done:
+            continue
+        captured = benchmark_mod.run_case(
+            case, policy, transport, seed=int(policy.benchmark_cfg.get("seed", 20260618))
+        )
+        result["cases"].append(captured)
+        store.write_json_atomic(out_path, result)
+        usage_mod.record(f"benchmark:{case['id']}", captured["candidate"]["usage"]["cost_usd"])
+    summary = benchmark_mod.report(result, _benchmark_cfg(policy))
+    result["report"] = summary
+    store.write_json_atomic(out_path, result)
+    if summary["passed"]:
+        applied.pop("_baseline_pending", None)
+        applied["_benchmark_baseline"] = summary
+        store.write_json_atomic(store.policy_path(), applied)
+    _emit(summary, f"benchmark {'PASSED' if summary['passed'] else 'FAILED'}: quality={summary['quality']['lower_confidence_bound']:.3f} cost_ratio={summary['cost']['ratio']:.3f}")
+    return 0 if summary["passed"] else 2
+
+
+def cmd_benchmark_report(args: argparse.Namespace) -> int:
+    policy = policy_mod.from_dict(_load_applied())
+    result = store.read_json(Path(args.results))
+    summary = benchmark_mod.report(result, _benchmark_cfg(policy))
+    _emit(summary, f"benchmark {'PASSED' if summary['passed'] else 'FAILED'}: quality={summary['quality']['lower_confidence_bound']:.3f} cost_ratio={summary['cost']['ratio']:.3f}")
+    return 0 if summary["passed"] else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="gotenx", description="Gotenx deterministic pipeline")
+    p = argparse.ArgumentParser(prog="gotenx", description="Gotenx cost-aware deliberation pipeline")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("init", help="initialize .gotenx/ and copy canonical policy")
     sp.add_argument("--force", action="store_true", help="overwrite existing applied policy")
     sp.set_defaults(func=cmd_init)
 
-    sp = sub.add_parser("run", help="run one panel->judge->metrics cycle")
+    sp = sub.add_parser("run", help="run one four-stage deliberation cycle")
     sp.add_argument("--task", help="task prompt for the panel")
     sp.add_argument("--replay", help="replay fixtures dir (deterministic, no LLM)")
     sp.add_argument("--human-override", action="store_true", help="mark run as human override (P6)")
@@ -272,6 +366,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("status", help="show applied policy, baseline, recent runs")
     sp.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser("benchmark", help="capture or report the v1 quality/cost benchmark")
+    bench_sub = sp.add_subparsers(dest="benchmark_command", required=True)
+    bp = bench_sub.add_parser("run", help="run all live candidate, baseline, and grading calls")
+    bp.add_argument("--suite", required=True, help="directory containing manifest.json")
+    bp.add_argument("--output", help="checkpoint/result JSON path")
+    bp.add_argument("--resume", action="store_true", help="resume an existing checkpoint")
+    bp.set_defaults(func=cmd_benchmark_run)
+    bp = bench_sub.add_parser("report", help="recompute deterministic acceptance from captured results")
+    bp.add_argument("--results", required=True, help="captured result JSON")
+    bp.set_defaults(func=cmd_benchmark_report)
     return p
 
 

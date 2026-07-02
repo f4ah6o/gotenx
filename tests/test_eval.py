@@ -29,9 +29,9 @@ class TestEval(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             case_dir = Path(d) / "case-regress"
             shutil.copytree(GOLDEN / "case-001", case_dir)
-            (case_dir / "judge" / "judge.raw.txt").write_text(
-                json.dumps([{"content": "Just cache it.",
-                             "source_ids": ["claude:insight:001"]}])
+            (case_dir / "stages" / "glm.raw.txt").write_text(
+                json.dumps([{"kind": "plan", "content": "Just cache it.",
+                             "source_ids": ["flash:insight:001"]}])
             )
             res = eval_case(case_dir, self.policy,
                             baseline={"panel_insight_survival_rate": 0.8})
