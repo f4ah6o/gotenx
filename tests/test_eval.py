@@ -65,6 +65,38 @@ class TestEval(unittest.TestCase):
         b = eval_case(GOLDEN / "case-001", self.policy, baseline={})["metrics"]
         self.assertEqual(a, b)
 
+    def test_missing_golden_dir_fails_closed(self):  # issue #4
+        res = eval_suite(Path("/nonexistent/golden/dir"), self.policy, baseline={})
+        self.assertFalse(res["passed"])
+        self.assertEqual(res["cases"], [])
+        self.assertEqual(res["cost"]["runs_x_cases_x_panels"], 0)
+        self.assertEqual(res["failures"][0]["reason"], "empty_golden_suite")
+
+    def test_empty_golden_dir_fails_closed(self):  # issue #4
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            res = eval_suite(Path(d), self.policy, baseline={})
+            self.assertFalse(res["passed"])
+            self.assertEqual(res["cases"], [])
+            self.assertEqual(res["failures"][0]["reason"], "empty_golden_suite")
+
+    def test_unrelated_files_only_fails_closed(self):  # issue #4
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "README.txt").write_text("not a case")
+            (Path(d) / "not-a-case").mkdir()
+            res = eval_suite(Path(d), self.policy, baseline={})
+            self.assertFalse(res["passed"])
+            self.assertEqual(res["cases"], [])
+            self.assertEqual(res["failures"][0]["reason"], "empty_golden_suite")
+
+    def test_nonempty_suite_unaffected(self):  # issue #4 regression guard
+        res = eval_suite(GOLDEN, self.policy, baseline={})
+        self.assertTrue(res["passed"])
+        self.assertNotIn("failures", res)
+
 
 if __name__ == "__main__":
     unittest.main()

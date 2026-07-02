@@ -170,14 +170,37 @@ def eval_case(case_dir: Path, policy: Policy, baseline: dict) -> dict:
 
 
 def eval_suite(golden_dir: Path, policy: Policy, baseline: dict) -> dict:
-    """Evaluate every ``case-*`` under ``golden_dir`` (P8 detail, P19 cost)."""
+    """Evaluate every ``case-*`` under ``golden_dir`` (P8 detail, P19 cost).
+
+    An empty or missing suite fails closed: zero cases can never certify a
+    candidate (``all([])`` is vacuously True), so this returns
+    ``passed=False`` with an explicit failure record instead of a green eval.
+    """
     golden_dir = Path(golden_dir)
-    case_dirs = sorted(
-        d for d in golden_dir.iterdir() if d.is_dir() and (d / "case.json").exists()
+    panel_count = (
+        len([s for s in policy.stages if s["role"] != "judge"])
+        if policy.uses_staged_orchestration else len(policy.panel_sources)
     )
+    case_dirs = []
+    if golden_dir.is_dir():
+        case_dirs = sorted(
+            d for d in golden_dir.iterdir() if d.is_dir() and (d / "case.json").exists()
+        )
+    if not case_dirs:
+        return {
+            "passed": False,
+            "cases": [],
+            "cost": {"runs_x_cases_x_panels": 0, "panels": panel_count},
+            "failures": [
+                {
+                    "reason": "empty_golden_suite",
+                    "golden_dir": str(golden_dir),
+                    "expected": "at least one case-*/case.json",
+                }
+            ],
+        }
     cases = [eval_case(d, policy, baseline) for d in case_dirs]
     passed = all(c["passed"] for c in cases)
-    panel_count = len([s for s in policy.stages if s["role"] != "judge"]) if policy.uses_staged_orchestration else len(policy.panel_sources)
     cost = sum(c["runs"] * panel_count for c in cases)
     return {
         "passed": passed,
