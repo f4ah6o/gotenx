@@ -32,6 +32,7 @@ from .panel import run_panel
 from .judge import run_judge
 from .policy import Policy
 from .provenance import build_graph
+from .orchestrator import run_staged
 
 ALLOWED_MODES = {"run", "replay", "eval"}
 
@@ -44,10 +45,16 @@ def _protected_runs(policy: Policy) -> int:
 def _one_run(case_dir: Path, task: str, policy: Policy) -> dict:
     """Execute a single top-level run (P2) in replay mode and return metrics."""
     transport = Transport(mode="replay", replay_dir=case_dir)
-    panel = run_panel(policy.panel_sources, task, transport)
-    judge = run_judge(panel, policy.judge_source, transport)
+    if policy.uses_staged_orchestration:
+        staged = run_staged(task, policy, transport)
+        panel, judge = staged["panel"], staged["judge"]
+        sources = [stage["source"] for stage in policy.stages if stage["role"] != "judge"]
+    else:
+        panel = run_panel(policy.panel_sources, task, transport)
+        judge = run_judge(panel, policy.judge_source, transport)
+        sources = policy.panel_sources
     graph = build_graph(panel, judge)
-    return metrics.compute_all(graph, policy.panel_sources)
+    return metrics.compute_all(graph, sources)
 
 
 def _provenance_faithful(case_dir: Path, policy: Policy) -> tuple[float | None, int]:
@@ -163,16 +170,40 @@ def eval_case(case_dir: Path, policy: Policy, baseline: dict) -> dict:
 
 
 def eval_suite(golden_dir: Path, policy: Policy, baseline: dict) -> dict:
-    """Evaluate every ``case-*`` under ``golden_dir`` (P8 detail, P19 cost)."""
+    """Evaluate every ``case-*`` under ``golden_dir`` (P8 detail, P19 cost).
+
+    An empty or missing suite fails closed: zero cases can never certify a
+    candidate (``all([])`` is vacuously True), so this returns
+    ``passed=False`` with an explicit failure record instead of a green eval.
+    """
     golden_dir = Path(golden_dir)
-    case_dirs = sorted(
-        d for d in golden_dir.iterdir() if d.is_dir() and (d / "case.json").exists()
+    panel_count = (
+        len([s for s in policy.stages if s["role"] != "judge"])
+        if policy.uses_staged_orchestration else len(policy.panel_sources)
     )
+    case_dirs = []
+    if golden_dir.is_dir():
+        case_dirs = sorted(
+            d for d in golden_dir.iterdir() if d.is_dir() and (d / "case.json").exists()
+        )
+    if not case_dirs:
+        return {
+            "passed": False,
+            "cases": [],
+            "cost": {"runs_x_cases_x_panels": 0, "panels": panel_count},
+            "failures": [
+                {
+                    "reason": "empty_golden_suite",
+                    "golden_dir": str(golden_dir),
+                    "expected": "at least one case-*/case.json",
+                }
+            ],
+        }
     cases = [eval_case(d, policy, baseline) for d in case_dirs]
     passed = all(c["passed"] for c in cases)
-    cost = sum(c["runs"] * len(policy.panel_sources) for c in cases)
+    cost = sum(c["runs"] * panel_count for c in cases)
     return {
         "passed": passed,
         "cases": cases,
-        "cost": {"runs_x_cases_x_panels": cost, "panels": len(policy.panel_sources)},
+        "cost": {"runs_x_cases_x_panels": cost, "panels": panel_count},
     }

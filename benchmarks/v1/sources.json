@@ -1,0 +1,37 @@
+[
+  {"repo":"pytest-dev/pytest","language":"python","license":"MIT","number":14614,"title":"Minor refactor of _find_parametrized_scope","commit":"070e35b1e3867803a61fc607c051c731ac5dc180"},
+  {"repo":"pytest-dev/pytest","language":"python","license":"MIT","number":14618,"title":"Update plugin list on the 9.1 branch","commit":"9a567e009f4d2da3ce1721c6db3109cb5744d40a"},
+  {"repo":"pytest-dev/pytest","language":"python","license":"MIT","number":14616,"title":"Fix add-label command in update-plugin-list","commit":"0ee0dffffe53608ef222aa98683b65762cdd966a"},
+  {"repo":"pytest-dev/pytest","language":"python","license":"MIT","number":14620,"title":"Fix stale loop variable in RaisesGroup error reporting","commit":"ef8b2993e5b48639e4a3d97d0525df9760781384"},
+  {"repo":"pytest-dev/pytest","language":"python","license":"MIT","number":14220,"title":"Fix stale loop variable in RaisesGroup error reporting","commit":"680f9f3ed3faaaa9a4fd1d8120618cd17cdee2d0"},
+
+  {"repo":"microsoft/TypeScript","language":"typescript","license":"Apache-2.0","number":62891,"title":"Fix copyright notice typo consistently","commit":"0a071327153b4c386dfcab19a584e0d6224d1354"},
+  {"repo":"microsoft/TypeScript","language":"typescript","license":"Apache-2.0","number":62890,"title":"Fix accidental module replacements in tests","commit":"d7ae3aa9405d8dc534108a0fe5c4ad1114e6b358"},
+  {"repo":"microsoft/TypeScript","language":"typescript","license":"Apache-2.0","number":62885,"title":"Revert incorrect matchAll type change","commit":"c84cb947786735fcce3bf86c3c33acea71afc14c"},
+  {"repo":"microsoft/TypeScript","language":"typescript","license":"Apache-2.0","number":62873,"title":"Correct String.prototype.matchAll declaration","commit":"bbb5322c96e5d98fbdd50ac16ef7967e1560c92a"},
+  {"repo":"microsoft/TypeScript","language":"typescript","license":"Apache-2.0","number":62243,"title":"Improve inference for thisless functions","commit":"366da34ae60b458e97c880fedf33298d6842ddd6"},
+
+  {"repo":"prometheus/prometheus","language":"go","license":"Apache-2.0","number":18804,"title":"Plumb histogram start timestamps through WAL and WBL","commit":"505095b64b43dd76baf08839e1800a8d473c97e0"},
+  {"repo":"prometheus/prometheus","language":"go","license":"Apache-2.0","number":18961,"title":"Update promci subactions","commit":"d653014d8abc206847a69768f5d5dc0462a27a76"},
+  {"repo":"prometheus/prometheus","language":"go","license":"Apache-2.0","number":18928,"title":"Fix native histogram sample accounting","commit":"a718c789d799d28bf7191b21396f9dbace74e9d9"},
+  {"repo":"prometheus/prometheus","language":"go","license":"Apache-2.0","number":18847,"title":"Store timestamp in walExpiries on stale series eviction","commit":"5ddb7e49e3c89c406687cf020f85e04a3bac16fd"},
+  {"repo":"prometheus/prometheus","language":"go","license":"Apache-2.0","number":18960,"title":"Update promci version","commit":"24582595efe2adad0f1c052c87b3fd4ad1339703"},
+
+  {"repo":"rust-lang/cargo","language":"rust","license":"Apache-2.0","number":17115,"title":"Remove windows-sys dependencies older than 0.61","commit":"b58e5fe48c497f20b7b4f779a10719dabc713eea"},
+  {"repo":"rust-lang/cargo","language":"rust","license":"Apache-2.0","number":17107,"title":"Run Cargo lints like rustc lints during install","commit":"66c9ce85a77cfb6905699979cc4c987bef9b1b09"},
+  {"repo":"rust-lang/cargo","language":"rust","license":"Apache-2.0","number":17095,"title":"Report all diagnostics in order","commit":"a94c6c9d30a1f6aa8c6e8d6b261d77530cf7f85e"},
+  {"repo":"rust-lang/cargo","language":"rust","license":"Apache-2.0","number":17098,"title":"Remove cargo-util-terminal from bump exclusions","commit":"fc06365c652a3e422a91eea3561373aa18d9a1cc"},
+  {"repo":"rust-lang/cargo","language":"rust","license":"Apache-2.0","number":17101,"title":"Align diagnostic display paths with rustc","commit":"4ba81eb59affdcba1421af478b2f5ea14aac69fa"},
+
+  {"repo":"swiftlang/swift","language":"swift","license":"Apache-2.0","number":89789,"title":"Add heap-scanning dump-concurrency on Linux and Windows","commit":"f0f5c78221d28808e48dbf92903f5c6634a26e77"},
+  {"repo":"swiftlang/swift","language":"swift","license":"Apache-2.0","number":89125,"title":"Handle raw identifiers in renamed APIs","commit":"bd216eb75a25eda543a02fb07d0feec3ffde832d"},
+  {"repo":"swiftlang/swift","language":"swift","license":"Apache-2.0","number":90001,"title":"Avoid invalid SourceLoc during accessor completion","commit":"9e7d683216a02abc8aea94f20d1f00f5012a21af"},
+  {"repo":"swiftlang/swift","language":"swift","license":"Apache-2.0","number":90006,"title":"Surface isolation history in diagnostics","commit":"5b92e5c57d0058648761c5de01b7174f00337831"},
+  {"repo":"swiftlang/swift","language":"swift","license":"Apache-2.0","number":90010,"title":"Update reference counting ABI tests","commit":"058b8bcbfe864e638de6e839c9dcb33141e51107"},
+
+  {"repo":"moonbitlang/core","language":"moonbit","license":"Apache-2.0","number":3694,"title":"Add Logger::write_string_interpolation","commit":"98298165acfc42df6ead3a4b37311139e065e12f"},
+  {"repo":"moonbitlang/core","language":"moonbit","license":"Apache-2.0","number":3690,"title":"Correct cosh large-argument branch","commit":"06c1e672cdb977b776a3663f1e0a470102d99601"},
+  {"repo":"moonbitlang/core","language":"moonbit","license":"Apache-2.0","number":3693,"title":"Add ReadOnlyArray::unsafe_get","commit":"5cdb6d1786851e64728bb6889996435ba95b60ba"},
+  {"repo":"moonbitlang/core","language":"moonbit","license":"Apache-2.0","number":3692,"title":"Make sinh overflow boundary inclusive","commit":"4243079c977ea40d661be6ee87c9d16a96154c01"},
+  {"repo":"moonbitlang/core","language":"moonbit","license":"Apache-2.0","number":3691,"title":"Use unsigned comparison at cosh overflow boundary","commit":"235d226745d181b09782182272cde63137337afd"}
+]

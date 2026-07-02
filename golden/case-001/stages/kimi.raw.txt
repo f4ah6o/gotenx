@@ -1,0 +1,1 @@
+[{"kind":"proposal","content":"Add a covering index on orders(user_id, created_at).","source_ids":["flash:insight:001"]}]

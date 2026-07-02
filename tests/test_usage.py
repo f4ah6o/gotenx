@@ -160,9 +160,10 @@ class TestUsagePersistence(unittest.TestCase):
 
     def test_cmd_run_real_persists_usage_outside_artifacts(self):
         policy = {
-            "schema_version": "gotenx.config.policy.v2",
+            "schema_version": "gotenx.config.policy.v3",
             "panel": {"sources": ["claude"]},
             "judge": {"source": "claude"},
+            "orchestration": {"stages": []},
         }
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -195,9 +196,10 @@ class TestUsagePersistence(unittest.TestCase):
 
     def test_cmd_run_replay_does_not_persist_usage(self):
         policy = {
-            "schema_version": "gotenx.config.policy.v2",
+            "schema_version": "gotenx.config.policy.v3",
             "panel": {"sources": ["claude"]},
             "judge": {"source": "claude"},
+            "orchestration": {"stages": []},
         }
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

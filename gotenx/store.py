@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,12 +44,20 @@ def proposals_dir(root: Path | None = None) -> Path:
     return gotenx_dir(root) / "proposals"
 
 
+def migrations_dir(root: Path | None = None) -> Path:
+    return gotenx_dir(root) / "migrations"
+
+
 def policy_path(root: Path | None = None) -> Path:
     return gotenx_dir(root) / "policy.json"
 
 
 def baseline_path(root: Path | None = None) -> Path:
     return gotenx_dir(root) / "baseline.json"
+
+
+def usage_ledger_path(root: Path | None = None) -> Path:
+    return gotenx_dir(root) / "usage-ledger.json"
 
 
 def ensure_layout(root: Path | None = None) -> Path:
@@ -73,6 +82,21 @@ def new_run_id(root: Path | None = None) -> str:
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def write_json_atomic(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 def read_json(path: Path) -> dict:
@@ -104,21 +128,16 @@ def make_metadata(
     return meta
 
 
-def save_run(
-    run_id: str,
-    panel: dict,
-    judge: dict,
-    metrics: dict,
-    metadata: dict,
-    root: Path | None = None,
-    *,
-    usage: dict | None = None,
-) -> Path:
+def save_run(run_id: str, panel: dict, judge: dict, metrics: dict, metadata: dict,
+             root: Path | None = None, *, stages: list | None = None,
+             usage: dict | None = None) -> Path:
     rdir = runs_dir(root) / run_id
     write_json(rdir / "panel.json", panel)
     write_json(rdir / "judge.json", judge)
     write_json(rdir / "metrics.json", metrics)
     write_json(rdir / "metadata.json", metadata)
+    if stages is not None:
+        write_json(rdir / "stages.json", {"stages": stages})
     if usage is not None:
         write_json(rdir / "usage.json", usage)
     return rdir

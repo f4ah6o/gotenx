@@ -14,6 +14,7 @@ IDs are never taken from model output; the caller assigns them (P9/P11).
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -51,6 +52,7 @@ class Transport:
     replay_dir: Path | None = None
     adapters: dict = field(default_factory=lambda: dict(DEFAULT_ADAPTERS))
     timeout: int = 600
+    cwd: Path | None = None
 
     def invoke(self, source: str, prompt: str, slot: str) -> str:
         """Return the raw assistant text for ``source``.
@@ -64,6 +66,63 @@ class Transport:
         if self.mode == "replay":
             return InvokeResult(raw=self._replay(slot))
         return self._real(source, prompt)
+
+    def invoke_model(self, stage: dict, prompt: str) -> "ModelResult":
+        """Invoke one configured OpenCode model and retain metering data."""
+        if self.mode == "replay":
+            raw = self._replay(f"stages/{stage['id']}")
+            usage_path = Path(self.replay_dir or ".") / "stages" / f"{stage['id']}.usage.json"
+            usage = json.loads(usage_path.read_text()) if usage_path.exists() else {}
+            return ModelResult(text=raw, usage=usage, raw_events=[])
+
+        argv = [
+            "opencode", "run", "--pure", "--agent",
+            str(stage.get("agent", "gotenx-readonly")), "--model", str(stage["model"]),
+            "--format", "json",
+        ]
+        variant = stage.get("variant")
+        if variant:
+            argv.extend(["--variant", str(variant)])
+        argv.append(prompt)
+        agent_config = {
+            "description": "Read-only Gotenx planning and review analyst",
+            "mode": "primary",
+            "permission": {
+                "edit": "deny", "bash": "deny", "webfetch": "deny",
+                "task": "deny", "question": "deny",
+            },
+        }
+        benchmark_agent_config = {
+            "description": "Context-only Gotenx benchmark participant",
+            "mode": "primary",
+            "permission": {
+                "read": "deny", "edit": "deny", "bash": "deny",
+                "webfetch": "deny", "task": "deny", "question": "deny",
+            },
+        }
+        env = dict(os.environ)
+        try:
+            inline = json.loads(env.get("OPENCODE_CONFIG_CONTENT", "{}"))
+        except json.JSONDecodeError:
+            inline = {}
+        if not isinstance(inline, dict):
+            inline = {}
+        if not isinstance(inline.get("agent"), dict):
+            inline["agent"] = {}
+        agents = inline["agent"]
+        agents["gotenx-readonly"] = agent_config
+        agents["gotenx-benchmark"] = benchmark_agent_config
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps(inline)
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=self.timeout,
+            cwd=self.cwd, env=env,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"OpenCode stage {stage['id']!r} failed (exit {proc.returncode}): "
+                f"{proc.stderr.strip()[:500]}"
+            )
+        return parse_opencode_events(proc.stdout)
 
     # -- replay -----------------------------------------------------------
     def _replay(self, slot: str) -> str:
@@ -110,6 +169,68 @@ class Transport:
 
 
 _ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class ModelResult:
+    text: str
+    usage: dict
+    raw_events: list[dict]
+
+
+def _walk(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk(child)
+
+
+def parse_opencode_events(raw: str) -> ModelResult:
+    """Parse OpenCode NDJSON output without depending on one event revision."""
+    events: list[dict] = []
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+
+    texts: list[str] = []
+    cost = 0.0
+    tokens = {"input": 0, "output": 0, "reasoning": 0, "cache_read": 0, "cache_write": 0}
+    found_usage = False
+    for event in events:
+        if event.get("type") == "text":
+            part = event.get("part", event)
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                texts.append(part["text"])
+        for obj in _walk(event):
+            if isinstance(obj.get("cost"), (int, float)):
+                cost += float(obj["cost"])
+                found_usage = True
+            tok = obj.get("tokens")
+            if not isinstance(tok, dict):
+                continue
+            found_usage = True
+            tokens["input"] += int(tok.get("input", 0) or 0)
+            tokens["output"] += int(tok.get("output", 0) or 0)
+            tokens["reasoning"] += int(tok.get("reasoning", 0) or 0)
+            cache = tok.get("cache", {}) if isinstance(tok.get("cache"), dict) else {}
+            tokens["cache_read"] += int(cache.get("read", 0) or 0)
+            tokens["cache_write"] += int(cache.get("write", 0) or 0)
+
+    if not texts and events:
+        for obj in _walk(events):
+            if isinstance(obj.get("text"), str):
+                texts.append(obj["text"])
+    if not events:
+        return ModelResult(text=raw, usage={}, raw_events=[])
+    usage = {"cost_usd": cost, "tokens": tokens} if found_usage else {}
+    return ModelResult(text="".join(texts), usage=usage, raw_events=events)
 
 
 def extract_json_array(text: str) -> list:
