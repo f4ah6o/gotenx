@@ -13,7 +13,7 @@
     },
     "status": {
       "type": "string",
-      "enum": ["ok", "blocked", "error", "human_override"]
+      "enum": ["ok", "blocked", "failed", "error", "human_override"]
     },
     "panels": {
       "type": "array",

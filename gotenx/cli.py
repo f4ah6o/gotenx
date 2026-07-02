@@ -89,8 +89,16 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def _resolve_task(args: argparse.Namespace) -> str:
+    """Positional TASK words or --task; the explicit flag wins (issue #3)."""
+    if args.task is not None:
+        return args.task
+    return " ".join(getattr(args, "task_words", []) or [])
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     policy = policy_mod.from_dict(_load_applied())
+    task = _resolve_task(args)
     if args.replay:
         transport = Transport(mode="replay", replay_dir=Path(args.replay))
         mode = "replay"
@@ -102,12 +110,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     staged = None
     legacy_usage = None
     if policy.uses_staged_orchestration:
-        staged = run_staged(args.task or "", policy, transport)
+        staged = run_staged(task, policy, transport)
         panel = staged["panel"]
         judge = staged["judge"]
         configured_sources = [s["source"] for s in policy.stages if s["role"] != "judge"]
     else:
-        panel = run_panel(policy.panel_sources, args.task or "", transport)
+        panel = run_panel(policy.panel_sources, task, transport)
         judge = run_judge(panel, policy.judge_source, transport)
         configured_sources = policy.panel_sources
         panel_usage = panel.pop("usage", None)
@@ -120,8 +128,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     warnings = list(panel.get("warnings", [])) + list(judge.get("warnings", [])) + list(graph.warnings)
     if staged:
         status = staged["status"]
+        legacy_failure = None
     else:
-        status = "ok"
+        # P8 fail closed (issue #2): a real (non-replay) run with nothing
+        # usable must not report ok. Replay stays lenient for golden fixtures.
+        legacy_failure = None
+        if mode == "run":
+            if not panel.get("insights"):
+                legacy_failure = {"reason": "panel_empty"}
+            elif not judge.get("items"):
+                legacy_failure = {"reason": "judge_empty"}
+            elif not graph.referenced_panel_ids:
+                legacy_failure = {"reason": "no_grounded_judge_items"}
+        status = "failed" if legacy_failure else "ok"
     metadata = store.make_metadata(
         run_id=run_id,
         mode=mode,
@@ -135,6 +154,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         metadata["cost_usd"] = staged["usage"]["cost_usd"]
         if staged.get("failure"):
             metadata["failure"] = staged["failure"]
+    elif legacy_failure:
+        metadata["failure"] = legacy_failure
     store.save_run(
         run_id, panel, judge, run_metrics, metadata,
         stages=staged["stages"] if staged else None,
@@ -345,7 +366,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_init)
 
     sp = sub.add_parser("run", help="run one four-stage deliberation cycle")
-    sp.add_argument("--task", help="task prompt for the panel")
+    sp.add_argument("task_words", nargs="*", metavar="TASK",
+                     help="task prompt (positional; joined with spaces)")
+    sp.add_argument("--task", help="task prompt for the panel (overrides positional TASK)")
     sp.add_argument("--replay", help="replay fixtures dir (deterministic, no LLM)")
     sp.add_argument("--human-override", action="store_true", help="mark run as human override (P6)")
     sp.set_defaults(func=cmd_run)
