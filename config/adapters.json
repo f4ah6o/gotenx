@@ -1,0 +1,27 @@
+{
+  "schema_version": "gotenx.adapters.v1",
+  "adapters": {
+    "claude": {
+      "argv": ["claude", "-p", "{prompt}", "--output-format", "json"],
+      "format": "envelope",
+      "result_path": "result",
+      "usage_path": "usage",
+      "doctor_argv": ["claude", "--version"],
+      "timeout_seconds": 600
+    },
+    "codex": {
+      "argv": ["codex", "exec", "--json", "--sandbox", "read-only", "--ephemeral", "-C", "{cwd}", "{prompt}"],
+      "format": "codex_jsonl",
+      "result_path": null,
+      "doctor_argv": ["codex", "--version"],
+      "timeout_seconds": 600
+    },
+    "opencode": {
+      "argv": ["opencode", "run", "{prompt}"],
+      "format": "plain",
+      "result_path": null,
+      "doctor_argv": ["opencode", "--version"],
+      "timeout_seconds": 600
+    }
+  }
+}

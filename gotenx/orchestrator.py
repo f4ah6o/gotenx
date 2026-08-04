@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 
 from . import ids
@@ -38,6 +39,8 @@ def _normalize(stage: dict, raw_items: list, valid_prior_ids: set[str]) -> list[
     seqs: dict[str, int] = defaultdict(int)
     out = []
     for raw in raw_items[: int(stage.get("max_items", 12))]:
+        if not isinstance(raw, dict):
+            raise ValueError(f"stage {stage['id']!r} returned a non-object item")
         kind = str(raw.get("kind", "plan")).strip().lower()
         kind = "".join(c if (c.isalnum() or c == "_") else "_" for c in kind)
         if not kind or not kind[0].isalpha():
@@ -51,9 +54,11 @@ def _normalize(stage: dict, raw_items: list, valid_prior_ids: set[str]) -> list[
             "content": content,
         }
         if stage["role"] != "scout":
+            source_ids = raw.get("source_ids", [])
+            if not isinstance(source_ids, list):
+                raise ValueError(f"stage {stage['id']!r} returned non-list source_ids")
             item["source_ids"] = [
-                str(sid) for sid in raw.get("source_ids", [])
-                if str(sid) in valid_prior_ids
+                str(sid) for sid in source_ids if str(sid) in valid_prior_ids
             ]
         out.append(item)
     return out
@@ -68,6 +73,33 @@ def _validate_items(stage: dict, items: list[dict]) -> None:
         raise ValueError(f"stage {stage['id']!r} returned an ungrounded item")
 
 
+def _invocation_cost(usage: dict, *, real: bool) -> float:
+    if real and not usage:
+        raise ValueError("OpenCode output did not contain usage metering")
+    raw = usage.get("cost_usd", 0.0) if isinstance(usage, dict) else 0.0
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError("OpenCode usage cost_usd must be numeric")
+    cost = float(raw)
+    if not math.isfinite(cost) or cost < 0:
+        raise ValueError("OpenCode usage cost_usd must be finite and non-negative")
+    return cost
+
+
+def _aggregate_usage(attempts: list[dict], total_cost: float) -> dict:
+    token_totals: dict[str, int] = defaultdict(int)
+    for attempt in attempts:
+        usage = attempt.get("usage")
+        tokens = usage.get("tokens", {}) if isinstance(usage, dict) else {}
+        if isinstance(tokens, dict):
+            for key, value in tokens.items():
+                if isinstance(value, int) and not isinstance(value, bool):
+                    token_totals[key] += value
+    result: dict = {"cost_usd": total_cost, "attempts": len(attempts)}
+    if token_totals:
+        result["tokens"] = dict(token_totals)
+    return result
+
+
 def run_staged(task: str, policy, transport: Transport, *, root=None, agent_override: str | None = None) -> dict:
     stages_out: list[dict] = []
     prior: list[dict] = []
@@ -77,48 +109,110 @@ def run_staged(task: str, policy, transport: Transport, *, root=None, agent_over
 
     for configured_stage in policy.stages:
         stage = dict(configured_stage)
-        if agent_override:
-            stage["agent"] = agent_override
-        else:
-            stage["agent"] = policy.orchestration.get("readonly_agent", "gotenx-readonly")
+        stage["agent"] = agent_override or policy.orchestration.get("readonly_agent", "gotenx-readonly")
         budget = budget_status(policy, accrued=total_cost, root=root)
         if transport.mode == "real" and not budget["allowed"]:
             failed = {"stage": stage["id"], "reason": "budget_exhausted", "budget": budget}
             break
-        attempt_cost = 0.0
-        retry_cost = 0.0
-        try:
-            result = transport.invoke_model(stage, _prompt(stage, task, prior))
-            attempt_cost = float(result.usage.get("cost_usd", 0.0))
-            parsed = extract_json_array(result.text)
-            items = _normalize(stage, parsed, {item["id"] for item in prior})
-            _validate_items(stage, items)
-            if transport.mode == "real" and not result.usage:
-                raise ValueError("OpenCode output did not contain usage metering")
-        except Exception as exc:  # one corrective retry
-            total_cost += attempt_cost
-            retry_budget = budget_status(policy, accrued=total_cost, root=root)
-            if transport.mode == "real" and not retry_budget["allowed"]:
-                failed = {"stage": stage["id"], "reason": "budget_exhausted_before_retry", "budget": retry_budget}
-                break
+
+        attempts: list[dict] = []
+        stage_cost = 0.0
+        items: list[dict] | None = None
+        first_error: Exception | None = None
+
+        for attempt_no in (1, 2):
+            if attempt_no == 2:
+                retry_budget = budget_status(policy, accrued=total_cost, root=root)
+                if transport.mode == "real" and not retry_budget["allowed"]:
+                    failed = {
+                        "stage": stage["id"], "reason": "budget_exhausted_before_retry",
+                        "budget": retry_budget, "attempts": attempts,
+                    }
+                    break
+            prompt = _prompt(stage, task, prior)
+            if attempt_no == 2:
+                prompt += "\nYour prior response was invalid. Return only the required JSON array."
             try:
-                result = transport.invoke_model(stage, _prompt(stage, task, prior) + "\nYour prior response was invalid. Return only the required JSON array.")
-                retry_cost = float(result.usage.get("cost_usd", 0.0))
+                result = transport.invoke_model(stage, prompt)
+            except Exception as exc:
+                attempts.append({
+                    "attempt": attempt_no, "status": "transport_error", "usage": None,
+                    "cost_usd": 0.0, "error": str(exc),
+                })
+                if attempt_no == 1:
+                    first_error = exc
+                    continue
+                failed = {
+                    "stage": stage["id"], "reason": "stage_failed", "detail": str(exc),
+                    "attempts": attempts,
+                }
+                break
+
+            try:
+                cost = _invocation_cost(result.usage, real=transport.mode == "real")
+            except Exception as exc:
+                attempts.append({
+                    "attempt": attempt_no, "status": "invalid_usage", "usage": result.usage,
+                    "cost_usd": 0.0, "error": str(exc),
+                })
+                if transport.mode == "real":
+                    failed = {
+                        "stage": stage["id"], "reason": "stage_failed", "detail": str(exc),
+                        "attempts": attempts,
+                    }
+                    break
+                if attempt_no == 1:
+                    first_error = exc
+                    continue
+                failed = {
+                    "stage": stage["id"], "reason": "stage_failed", "detail": str(exc),
+                    "attempts": attempts,
+                }
+                break
+
+            stage_cost += cost
+            total_cost += cost
+            audit = {
+                "attempt": attempt_no, "status": "returned", "usage": result.usage,
+                "cost_usd": cost,
+            }
+            attempts.append(audit)
+            try:
                 parsed = extract_json_array(result.text)
                 items = _normalize(stage, parsed, {item["id"] for item in prior})
                 _validate_items(stage, items)
-                if transport.mode == "real" and not result.usage:
-                    raise ValueError("OpenCode output did not contain usage metering")
-                warnings.append(f"stage {stage['id']!r} required one retry: {exc}")
-            except Exception as retry_exc:
-                total_cost += retry_cost
-                failed = {"stage": stage["id"], "reason": "stage_failed", "detail": str(retry_exc)}
+            except Exception as exc:
+                audit["status"] = "invalid_output"
+                audit["error"] = str(exc)
+                items = None
+                if attempt_no == 1:
+                    first_error = exc
+                    continue
+                failed = {
+                    "stage": stage["id"], "reason": "stage_failed", "detail": str(exc),
+                    "attempts": attempts,
+                }
                 break
-        stage_cost = float(result.usage.get("cost_usd", 0.0))
-        total_cost += stage_cost
+
+            audit["status"] = "accepted"
+            if attempt_no == 2:
+                warnings.append(f"stage {stage['id']!r} required one retry: {first_error}")
+            break
+
+        if failed:
+            break
+        if items is None:
+            failed = {
+                "stage": stage["id"], "reason": "stage_failed",
+                "detail": "stage completed without accepted output", "attempts": attempts,
+            }
+            break
+
+        stage_usage = _aggregate_usage(attempts, stage_cost)
         stages_out.append({
             "id": stage["id"], "role": stage["role"], "model": stage["model"],
-            "variant": stage.get("variant"), "items": items, "usage": result.usage,
+            "variant": stage.get("variant"), "items": items, "usage": stage_usage,
+            "attempts": attempts,
         })
         prior.extend(items)
 
@@ -135,7 +229,11 @@ def run_staged(task: str, policy, transport: Transport, *, root=None, agent_over
     return {
         "status": "blocked" if failed else "ok",
         "stages": stages_out,
-        "panel": {"insights": non_judge, "panels": [s["id"] for s in stages_out if s["role"] != "judge"], "warnings": warnings},
+        "panel": {
+            "insights": non_judge,
+            "panels": [s["id"] for s in stages_out if s["role"] != "judge"],
+            "warnings": warnings,
+        },
         "judge": {"items": judge_items, "warnings": []},
         "usage": {"cost_usd": total_cost, "stages": len(stages_out)},
         "failure": failed,

@@ -1,9 +1,11 @@
 """P18 .gotenx/ runtime store and metadata.json.
 
-Layout, rooted at the project dir (``$CLAUDE_PROJECT_DIR`` or cwd):
+Layout, rooted at the project dir (``$GOTENX_PROJECT_DIR``, host-specific
+project env vars, or cwd):
 
     .gotenx/
       policy.json            # the currently-applied policy (P13 "current applied")
+      adapters.json          # project-local agent CLI overrides
       baseline.json          # ratcheted baselines (P4/P15)
       runs/<run_id>/
         panel.json
@@ -29,7 +31,11 @@ GOTENX_DIR = ".gotenx"
 
 
 def project_root() -> Path:
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+    for name in ("GOTENX_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "CODEX_PROJECT_DIR", "CODEX_WORKSPACE_ROOT"):
+        value = os.environ.get(name)
+        if value:
+            return Path(value)
+    return Path(os.getcwd())
 
 
 def gotenx_dir(root: Path | None = None) -> Path:
@@ -54,6 +60,10 @@ def policy_path(root: Path | None = None) -> Path:
 
 def baseline_path(root: Path | None = None) -> Path:
     return gotenx_dir(root) / "baseline.json"
+
+
+def adapters_path(root: Path | None = None) -> Path:
+    return gotenx_dir(root) / "adapters.json"
 
 
 def usage_ledger_path(root: Path | None = None) -> Path:

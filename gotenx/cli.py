@@ -1,6 +1,6 @@
 """gotenx CLI — the deterministic core driven by the plugin slash commands.
 
-Subcommands: init | run | eval | propose | apply | status
+Subcommands: init | doctor | run | eval | propose | apply | status
 
 Every subcommand prints a JSON result to stdout (machine-readable for the
 slash-command layer) and a one-line human summary to stderr.
@@ -23,7 +23,7 @@ from . import proposal as proposal_mod
 from . import store
 from .evalrun import eval_suite
 from .judge import run_judge
-from .llm import Transport
+from .llm import Transport, doctor_adapters, load_adapters, merge_adapters
 from .orchestrator import run_staged
 from .panel import run_panel
 from .provenance import build_graph
@@ -32,11 +32,31 @@ from . import benchmark as benchmark_mod
 
 
 def plugin_root() -> Path:
-    return Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path(__file__).resolve().parent.parent))
+    return Path(
+        os.environ.get("GOTENX_PLUGIN_ROOT")
+        or os.environ.get("CLAUDE_PLUGIN_ROOT")
+        or os.environ.get("CODEX_PLUGIN_ROOT")
+        or Path(__file__).resolve().parent.parent
+    )
 
 
 def template_policy_path() -> Path:
     return plugin_root() / "config" / "policy.json"
+
+
+def template_adapters_path() -> Path:
+    return plugin_root() / "config" / "adapters.json"
+
+
+def _load_adapters() -> dict:
+    path = store.adapters_path()
+    return load_adapters(path) if path.exists() else merge_adapters()
+
+
+def _required_adapter_sources(policy) -> list[str]:
+    if policy.uses_staged_orchestration:
+        return ["opencode"]
+    return list(dict.fromkeys([*policy.panel_sources, policy.judge_source]))
 
 
 def _load_applied() -> dict:
@@ -81,9 +101,18 @@ def cmd_init(args: argparse.Namespace) -> int:
         created = True
     if not store.baseline_path().exists():
         store.write_json(store.baseline_path(), {})
+    adapters_created = False
+    if not store.adapters_path().exists() or args.force:
+        adapters = json.loads(template_adapters_path().read_text())
+        store.write_json(store.adapters_path(), adapters)
+        adapters_created = True
     problems = policy_mod.validate(dst)
     _emit(
-        {"initialized": True, "policy": str(dst), "created": created, "problems": problems},
+        {
+            "initialized": True, "policy": str(dst), "created": created,
+            "adapters": str(store.adapters_path()), "adapters_created": adapters_created,
+            "problems": problems,
+        },
         f"gotenx initialized at {store.gotenx_dir()} (policy {'written' if created else 'kept'})",
     )
     return 1 if problems else 0
@@ -92,18 +121,75 @@ def cmd_init(args: argparse.Namespace) -> int:
 def _resolve_task(args: argparse.Namespace) -> str:
     """Positional TASK words or --task; the explicit flag wins (issue #3)."""
     if args.task is not None:
-        return args.task
-    return " ".join(getattr(args, "task_words", []) or [])
+        task = args.task
+    else:
+        task = " ".join(getattr(args, "task_words", []) or [])
+    if not task.strip() and getattr(args, "replay", None):
+        case_path = Path(args.replay) / "case.json"
+        if case_path.exists():
+            try:
+                case = json.loads(case_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                case = {}
+            replay_task = case.get("task") if isinstance(case, dict) else None
+            if isinstance(replay_task, str):
+                task = replay_task
+    return task
+
+
+def _validate_task(task: object) -> str:
+    if not isinstance(task, str) or not task.strip():
+        raise ValueError("task must not be empty")
+    if len(task) > 100_000:
+        raise ValueError("task exceeds 100000 characters")
+    return task.strip()
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    policy = policy_mod.from_dict(_load_applied())
+    try:
+        adapters = _load_adapters()
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        _emit(
+            {"ok": False, "error": {"code": "invalid_adapter_config", "message": str(exc)}},
+            f"doctor FAILED: {exc}",
+        )
+        return 2
+    result = doctor_adapters(adapters, _required_adapter_sources(policy), cwd=store.project_root())
+    _emit(result, f"doctor {'PASSED' if result['ok'] else 'FAILED'}")
+    return 0 if result["ok"] else 2
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    try:
+        task = _validate_task(_resolve_task(args))
+    except ValueError as exc:
+        _emit(
+            {"error": {"code": "invalid_task", "message": str(exc)}},
+            f"run rejected: {exc}",
+        )
+        return 64
     policy = policy_mod.from_dict(_load_applied())
-    task = _resolve_task(args)
     if args.replay:
         transport = Transport(mode="replay", replay_dir=Path(args.replay))
         mode = "replay"
     else:
-        transport = Transport(mode="real", cwd=store.project_root())
+        try:
+            adapters = _load_adapters()
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            _emit(
+                {"error": {"code": "invalid_adapter_config", "message": str(exc)}},
+                f"run rejected: {exc}",
+            )
+            return 2
+        preflight = doctor_adapters(adapters, _required_adapter_sources(policy), cwd=store.project_root())
+        if not preflight["ok"]:
+            _emit(
+                {"error": {"code": "adapter_preflight_failed"}, "doctor": preflight},
+                "run rejected: adapter preflight failed; run `gotenx doctor`",
+            )
+            return 2
+        transport = Transport(mode="real", cwd=store.project_root(), adapters=adapters)
         mode = "run"
 
     run_id = store.new_run_id()
@@ -304,6 +390,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "baseline_pending": bool(applied.get("_baseline_pending")),
         "usage": usage_mod.budget_status(policy),
         "models": [stage.get("model") for stage in policy.stages],
+        "adapters": str(store.adapters_path()),
     }
     _emit(
         result,
@@ -332,12 +419,25 @@ def cmd_benchmark_run(args: argparse.Namespace) -> int:
     for case in suite["cases"]:
         if case["id"] in done:
             continue
-        captured = benchmark_mod.run_case(
-            case, policy, transport, seed=int(policy.benchmark_cfg.get("seed", 20260618))
-        )
+        try:
+            captured = benchmark_mod.run_case(
+                case, policy, transport, seed=int(policy.benchmark_cfg.get("seed", 20260618)),
+                root=store.project_root(),
+                record_cost=lambda role, cost, case_id=case["id"]: usage_mod.record(
+                    f"benchmark:{case_id}:{role}", cost
+                ),
+            )
+        except benchmark_mod.BenchmarkBudgetExhausted as exc:
+            blocked = {
+                "passed": False, "status": "blocked", "reason": "budget_exhausted",
+                "phase": exc.phase, "budget": exc.status, "completed_cases": len(result["cases"]),
+                "checkpoint": str(out_path),
+            }
+            store.write_json_atomic(out_path, result)
+            _emit(blocked, f"benchmark blocked before {exc.phase}; resume after budget recovers")
+            return 2
         result["cases"].append(captured)
         store.write_json_atomic(out_path, result)
-        usage_mod.record(f"benchmark:{case['id']}", captured["candidate"]["usage"]["cost_usd"])
     summary = benchmark_mod.report(result, _benchmark_cfg(policy))
     result["report"] = summary
     store.write_json_atomic(out_path, result)
@@ -364,6 +464,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("init", help="initialize .gotenx/ and copy canonical policy")
     sp.add_argument("--force", action="store_true", help="overwrite existing applied policy")
     sp.set_defaults(func=cmd_init)
+
+    sp = sub.add_parser("doctor", help="validate configured agent CLI adapters without model calls")
+    sp.set_defaults(func=cmd_doctor)
 
     sp = sub.add_parser("run", help="run one four-stage deliberation cycle")
     sp.add_argument("task_words", nargs="*", metavar="TASK",

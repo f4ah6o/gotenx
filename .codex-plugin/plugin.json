@@ -1,0 +1,25 @@
+{
+  "name": "gotenx",
+  "version": "1.4.0",
+  "description": "Cost-aware multi-agent deliberation with deterministic provenance, evaluation, and proposal gates.",
+  "author": {
+    "name": "Gotenx"
+  },
+  "repository": "https://github.com/f4ah6o/gotenx",
+  "keywords": ["panel", "judge", "eval", "provenance", "codex", "claude", "opencode"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Gotenx",
+    "shortDescription": "複数AIの見解を来歴付きで統合・評価",
+    "longDescription": "Codex、Claude Code、OpenCodeを診断・実行し、複数の分析を根拠ID付きの計画へ統合します。決定的な来歴指標、コスト予算、再現可能な評価、設定変更ゲートを備えます。",
+    "developerName": "Gotenx",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://github.com/f4ah6o/gotenx",
+    "defaultPrompt": [
+      "Gotenxでこのリポジトリの改善計画を作成する",
+      "Gotenxで変更内容を多角的にレビューする",
+      "Gotenxのdoctorとstatusを確認する"
+    ]
+  }
+}

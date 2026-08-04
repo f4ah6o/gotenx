@@ -1,7 +1,7 @@
 {
   "name": "gotenx",
-  "version": "1.3.0",
-  "description": "Cost-aware four-model OpenCode deliberation with deterministic provenance, evaluation, and proposal gates.",
+  "version": "1.4.0",
+  "description": "Cost-aware multi-agent deliberation for Claude Code, Codex, and OpenCode with deterministic provenance and evaluation gates.",
   "author": {
     "name": "Gotenx"
   },

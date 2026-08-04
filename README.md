@@ -1,10 +1,10 @@
-# Gotenx — Claude Code プラグイン
+# Gotenx — Codex / Claude Code プラグイン + CLI
 
-> **Gotenx v1.3** · v1.2「Frozen Baseline」を保持しつつ、自動移行される仕様
+> **Gotenx v1.4** · Codex対応、運用診断、課金・解析境界の堅牢化
 
 **Gotenx は「複数の AI に意見を出させ、1 つの計画にまとめ、その計画が元の意見を
 ちゃんと使っているかを“ごまかせない指標”で測る」ためのパイプラインです。**
-Claude Code のプラグインとして動きます。
+Codex と Claude Code のプラグイン、および単体CLIとして動きます。
 
 - 🧩 複数の分析役 CLI（`claude` / `codex` / `opencode`、または v1.3 の固定 4 段階 OpenCode パイプライン）が
   **インサイト（気づき）** を出す（= Panel）
@@ -14,6 +14,15 @@ Claude Code のプラグインとして動きます。
 - 💰 v1.3 ではコスト予算ガードレールと品質/コストの非劣性ベンチマークが加わる
 
 ---
+
+## v1.4 で追加されたもの
+
+- **Codexプラグイン対応** — `.codex-plugin/plugin.json` と `skills/gotenx/SKILL.md` を追加。
+- **Codex CLIアダプター** — `codex exec --json --sandbox read-only --ephemeral` を標準化し、JSONLの最終メッセージとトークン使用量を解析。
+- **`gotenx doctor`** — 必須CLI、実行ファイル、バージョン呼び出し、argvテンプレートをモデル呼び出しなしで診断。
+- **プロジェクト別アダプター設定** — `.gotenx/adapters.json` でコマンド、タイムアウト、出力形式を上書き可能。
+- **課金保護** — 空タスクを実行前に拒否し、再試行とベンチマークの全呼び出しコストを一度ずつ記録。
+- **構造的JSON抽出** — greedy regexを廃止し、サイズ制限付き `JSONDecoder.raw_decode` で配列・オブジェクトを決定的に抽出。
 
 ## v1.3 で追加されたもの
 
@@ -94,7 +103,7 @@ LLM の主観的判断が必要になる箇所(引用が本当に誠実か＝`pr
 5. **Eval / Proposal** — 既存設定を劣化させない範囲でのみ設定変更を許可する(後述のガードレール)。
 
 実行結果は、利用先プロジェクトの `.gotenx/runs/<run_id>/` に保存されます
-(このプラグインのリポジトリではなく、`$CLAUDE_PROJECT_DIR` か cwd 側)。
+(このプラグインのリポジトリではなく、`$GOTENX_PROJECT_DIR`、ホスト固有のプロジェクト変数、または cwd 側)。
 
 ---
 
@@ -104,11 +113,17 @@ LLM が無くても動く **決定的なウォークスルー**(ゴールデン�
 依存は Python 3 標準ライブラリのみ。
 
 ```bash
-# 1) プラグインとしてインストール(Claude Code から使う場合)
+# 1) Claude Codeプラグインとして使う
 claude --plugin-dir /path/to/gotenx
 
-# 2) CLI で直接試す(LLM 不要、すべて決定的)
-bin/gotenx init                              # .gotenx/ を作り、正準 policy.json を配置
+# Codexでは、このリポジトリをプラグインとしてインストールすると
+# `gotenx` skill が利用可能になる（.codex-plugin/plugin.json）。
+
+# 2) CLIを初期化し、実LLM依存を診断
+bin/gotenx init                              # policy.json / adapters.json を配置
+bin/gotenx doctor                            # モデルを呼ばずにCLI依存を検証
+
+# 3) LLM不要の決定的な動作確認
 bin/gotenx run --replay golden/case-001      # Panel→Judge→指標 を録画フィクスチャで再生
 bin/gotenx run "review this repo"            # 位置引数でタスクを渡すことも可能
 bin/gotenx eval                              # ゴールデンスイートを反復実行して検証
@@ -133,7 +148,7 @@ bin/gotenx benchmark run --suite .gotenx/benchmarks/v1 --resume
 }
 ```
 
-実際の LLM を使って動かすには `--replay` を外します(`bin/gotenx run --task "…"` または
+実際の LLM を使って動かす前に `bin/gotenx doctor` を通し、`--replay` を外します(`bin/gotenx run --task "…"` または
 `bin/gotenx run "…"`)。その場合は v1.3 の 4 段階 OpenCode パイプラインが有効なら OpenCode CLI が、
 レガシー v2 経路なら `claude` / `codex` / `opencode` CLI が利用可能である必要があります。
 
@@ -145,7 +160,8 @@ bin/gotenx benchmark run --suite .gotenx/benchmarks/v1 --resume
 
 | コマンド | 内容 |
 |---|---|
-| `/gotenx:init` | `.gotenx/` を作成し、正準 `policy.json` を設置、基準値を初期化(v2→v3 自動移行) |
+| `/gotenx:init` | `.gotenx/` を作成し、正準 `policy.json` と `adapters.json` を設置、基準値を初期化 |
+| `/gotenx:doctor` | 必須エージェントCLIとアダプター設定を、モデル呼び出しなしで診断 |
 | `/gotenx:run <task>` | 4 段階 OpenCode 熟考サイクルと計測済み指標を実行(`--replay <dir>` でフィクスチャ再生) |
 | `/gotenx:eval` | ゴールデンスイートを実行(反復実行・ケース別の合否・実測値) |
 | `/gotenx:benchmark` | 60 ケースの品質/コストベンチマークを取得・レポート |
@@ -229,14 +245,17 @@ GPT-5.5 high が候補 vs Opus を採点し、Opus 4.6 high が候補 vs GPT を
 ## ディレクトリ構成
 
 ```
-.claude-plugin/plugin.json   プラグインのマニフェスト
-commands/*.md                スラッシュコマンド定義(bin/gotenx を呼ぶ)
+.claude-plugin/plugin.json   Claude Codeプラグインのマニフェスト
+.codex-plugin/plugin.json    Codexプラグインのマニフェスト
+skills/gotenx/SKILL.md       Codex向けの実行ワークフロー
+commands/*.md                Claude Codeスラッシュコマンド定義(bin/gotenx を呼ぶ)
 agents/gotenx-judge.md        Judge サブエージェント(来歴に忠実な統合)
 hooks/hooks.json              PostToolUse フック(policy.json 編集時に検証)
 bin/gotenx                    決定的な CLI 本体
 bin/gotenx-validate-policy    フック本体:編集された policy.json を検証
 gotenx/                       Python パッケージ(ids, provenance, metrics, eval, orchestrator, benchmark …)
 config/policy.json            正準ポリシー(schema: gotenx.config.policy.v3)
+config/adapters.json          Claude/Codex/OpenCodeの正準CLIアダプター
 benchmarks/v1/sources.json    固定の public PR ベンチマークソース
 scripts/build_benchmark_suite.py  30 public + 30 合成ケースを構築
 golden/case-*/                検証用のゴールデンケース(再生フィクスチャ)
@@ -246,7 +265,7 @@ tests/                         unittest スイート
 ```
 
 利用先プロジェクトの **実行時の状態**は `<project>/.gotenx/` に置かれます
-(適用済み `policy.json`、`baseline.json`、使用量台帳、ベンチマークのチェックポイント、
+(適用済み `policy.json`、`adapters.json`、`baseline.json`、使用量台帳、ベンチマークのチェックポイント、
 `runs/<run_id>/`、`proposals/`)。既存の v2 状態は v3 への自動移行前に `.gotenx/migrations/`
 にバックアップされる。このプラグインのリポジトリ自体には書き込みません。
 
@@ -276,6 +295,7 @@ Gotenx は **仕様 v1.2「Frozen Baseline」**(凍結ベースライン、P1–
 - [`docs/patch1.md`](docs/patch1.md) — P1–P8
 - [`docs/patch2.md`](docs/patch2.md) — P9–P21
 - [`docs/patch3.md`](docs/patch3.md) — 凍結デルタ
+- [`docs/patch4.md`](docs/patch4.md) — Codex対応・アダプター診断・課金/解析境界の堅牢化
 
 ### 既知の未解決項目(持ち越し、ブロッカーではない)
 

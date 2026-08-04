@@ -4,12 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Gotenx is a Claude Code **plugin** implementing a deterministic
-Panel → Judge → Eval → Proposal pipeline (spec v1.2, "Frozen Baseline",
-P1–P24). It is packaged as a plugin: `.claude-plugin/plugin.json` manifest,
-`commands/*.md` slash commands, `agents/gotenx-judge.md` subagent,
-`hooks/hooks.json` PostToolUse hook — all thin wrappers around the
-stdlib-only Python core in `gotenx/`.
+Gotenx v1.4 is a Codex / Claude Code **plugin and CLI** implementing a deterministic
+Panel → Judge → Eval → Proposal pipeline. Codex uses `.codex-plugin/plugin.json`
+and `skills/gotenx/SKILL.md`; Claude Code uses `.claude-plugin/plugin.json`,
+`commands/*.md`, `agents/`, and `hooks/`. Both surfaces wrap the same stdlib-only
+Python core in `gotenx/`.
 
 Read `README.md` first — it documents the design principle, slash commands,
 layout, metrics, and guardrails in detail and is not repeated here.
@@ -26,6 +25,7 @@ python3 -m unittest tests.test_metrics.MetricsTest.test_panel_insight_survival_r
 
 # the CLI itself (bin/gotenx is the deterministic core; slash commands wrap it)
 bin/gotenx init
+bin/gotenx doctor
 bin/gotenx run --replay golden/case-001
 bin/gotenx eval
 bin/gotenx propose examples/proposal-accepted.json
@@ -64,16 +64,16 @@ way when modifying the pipeline.
    `configured_diversity_index` (protected).
 5. `gotenx/store.py` — persists `panel.json` / `judge.json` / `metrics.json` /
    `metadata.json` under `.gotenx/runs/<run_id>/` in the *consuming project*
-   (`$CLAUDE_PROJECT_DIR` or cwd) — not in this plugin repo.
+   (`$GOTENX_PROJECT_DIR`, host-specific project variables, or cwd) — not in this plugin repo.
 
-`Transport` (`gotenx/llm.py`) has two modes: `real` (shells out to the
-`claude`/`codex`/`opencode` CLIs in headless mode) and `replay` (reads
+`Transport` (`gotenx/llm.py`) has two modes: `real` (shells out to configurable
+`claude`/`codex`/`opencode` adapters; Codex is JSONL, read-only, and ephemeral) and `replay` (reads
 `panel/<src>.raw.txt` / `judge/judge.raw.txt` fixtures). Eval and the test
 suite always use `replay` so they are deterministic and require no LLM.
 
 ### Policy / Eval / Proposal lifecycle
 
-- `gotenx/policy.py` — `policy.json` (schema `gotenx.config.policy.v2`)
+- `gotenx/policy.py` — `policy.json` (schema `gotenx.config.policy.v3`)
   splits `protected_metrics`, `protected_policy_keys`, and
   `structural_invariants`. `from_dict` enforces that
   `observed_diversity_index` is never protected (only
@@ -113,6 +113,6 @@ the sampled `provenance_faithful` assertion. `mode` must be one of
 
 This repo is the plugin source (templates, code, golden fixtures). Runtime
 state for a consuming project lives in `<project>/.gotenx/` (`policy.json`,
-`baseline.json`, `runs/`, `proposals/`) — see `gotenx/store.py`. `bin/gotenx`
-resolves `CLAUDE_PLUGIN_ROOT` to find its own `config/policy.json` (template)
-and `golden/` (default eval suite) independent of the project root.
+`adapters.json`, `baseline.json`, `usage-ledger.json`, `runs/`, `proposals/`) — see `gotenx/store.py`. `bin/gotenx`
+resolves `GOTENX_PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, or `CODEX_PLUGIN_ROOT` to find
+its templates and `golden/` suite independently of the project root.

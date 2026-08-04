@@ -2,14 +2,19 @@
 """Entry point for the bundled gotenx CLI.
 
 Adds the plugin root to sys.path so the ``gotenx`` package imports without an
-install step, then dispatches to the CLI. ``CLAUDE_PLUGIN_ROOT`` is honoured for
-locating bundled config/golden when running inside Claude Code.
+install step, then dispatches to the CLI. Host-specific plugin-root variables
+are honoured, while direct execution resolves the root from this file.
 """
 import os
 import sys
 from pathlib import Path
 
-PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path(__file__).resolve().parent.parent))
+PLUGIN_ROOT = Path(
+    os.environ.get("GOTENX_PLUGIN_ROOT")
+    or os.environ.get("CLAUDE_PLUGIN_ROOT")
+    or os.environ.get("CODEX_PLUGIN_ROOT")
+    or Path(__file__).resolve().parent.parent
+)
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from gotenx.cli import main  # noqa: E402

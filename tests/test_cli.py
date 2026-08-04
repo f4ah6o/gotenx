@@ -36,7 +36,7 @@ class TestRunArgParsing(unittest.TestCase):  # issue #3
     def test_replay_without_task(self):
         args = self.parser.parse_args(["run", "--replay", "golden/case-001"])
         self.assertEqual(args.replay, "golden/case-001")
-        self.assertEqual(_resolve_task(args), "")
+        self.assertIn("checkout API", _resolve_task(args))
 
 
 class TestLegacyRunFailClosed(unittest.TestCase):  # issue #2
@@ -60,6 +60,7 @@ class TestLegacyRunFailClosed(unittest.TestCase):  # issue #2
     def _run(self, panel, judge):
         with mock.patch("gotenx.cli.run_panel", return_value=panel), \
              mock.patch("gotenx.cli.run_judge", return_value=judge), \
+             mock.patch("gotenx.cli.doctor_adapters", return_value={"ok": True, "adapters": []}), \
              contextlib.redirect_stdout(io.StringIO()):
             return cli.main(["run", "--task", "x"])
 
