@@ -25,7 +25,9 @@ def _assign_ids(source: str, raw_insights: list) -> list[dict]:
     """Assign deterministic ids per (source, kind), sequencing within kind."""
     seqs: dict[str, int] = defaultdict(int)
     out: list[dict] = []
-    for item in raw_insights:
+    for index, item in enumerate(raw_insights):
+        if not isinstance(item, dict):
+            raise ValueError(f"panel item {index} must be an object")
         kind = str(item.get("kind", "insight")).strip().lower() or "insight"
         # sanitise kind to a valid token
         kind = "".join(c if (c.isalnum() or c == "_") else "_" for c in kind)

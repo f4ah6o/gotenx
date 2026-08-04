@@ -58,7 +58,11 @@ def run_judge(panel: dict, judge_source: str, transport: Transport) -> dict:
 
     items: list[dict] = []
     for i, raw_item in enumerate(parsed, start=1):
+        if not isinstance(raw_item, dict):
+            return {"items": [], "warnings": [f"judge item {i} must be an object"], "usage": usage}
         source_ids = raw_item.get("source_ids", []) or []
+        if not isinstance(source_ids, list):
+            return {"items": [], "warnings": [f"judge item {i} source_ids must be a list"], "usage": usage}
         clean_ids = []
         for sid in source_ids:
             if ids.is_valid(str(sid)):

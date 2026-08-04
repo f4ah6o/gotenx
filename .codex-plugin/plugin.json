@@ -1,6 +1,6 @@
 {
   "name": "gotenx",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Cost-aware multi-agent deliberation with deterministic provenance, evaluation, and proposal gates.",
   "author": {
     "name": "Gotenx"

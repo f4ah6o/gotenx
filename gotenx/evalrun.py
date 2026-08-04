@@ -23,7 +23,6 @@ P11 provenance_faithful is a SAMPLED Eval-layer assertion (LLM judgement lives
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from . import metrics
@@ -33,6 +32,7 @@ from .judge import run_judge
 from .policy import Policy
 from .provenance import build_graph
 from .orchestrator import run_staged
+from .validation import (read_json, require_bool, require_list, require_number, require_object, require_string, validate_baseline)
 
 ALLOWED_MODES = {"run", "replay", "eval"}
 
@@ -66,7 +66,11 @@ def _provenance_faithful(case_dir: Path, policy: Policy) -> tuple[float | None, 
     fpath = case_dir / "faithful.json"
     if not fpath.exists():
         return None, 0
-    verdicts = json.loads(fpath.read_text()).get("verdicts", [])
+    data = require_object(read_json(fpath), path=fpath)
+    verdicts = require_list(data.get("verdicts", []), "$.verdicts", path=fpath)
+    for index, verdict in enumerate(verdicts):
+        item = require_object(verdict, f"$.verdicts[{index}]", path=fpath)
+        require_bool(item.get("faithful"), f"$.verdicts[{index}].faithful", path=fpath)
     if not verdicts:
         return None, 0
     k = int(policy.provenance_faithful_cfg.get("sample_k", 5))
@@ -79,9 +83,15 @@ def _provenance_faithful(case_dir: Path, policy: Policy) -> tuple[float | None, 
 
 def eval_case(case_dir: Path, policy: Policy, baseline: dict) -> dict:
     """Evaluate a single golden case, returning a P8/P21 case result."""
-    case = json.loads((case_dir / "case.json").read_text())
-    case_id = case.get("id", case_dir.name)
-    mode = case.get("mode", "replay")
+    case_path = case_dir / "case.json"
+    case = require_object(read_json(case_path), path=case_path)
+    case_id = require_string(case.get("id", case_dir.name), "$.id", path=case_path, max_chars=256)
+    mode = require_string(case.get("mode", "replay"), "$.mode", path=case_path, max_chars=32)
+    task = require_string(case.get("task"), "$.task", path=case_path, max_chars=100_000)
+    expected = require_object(case.get("expected", {}), "$.expected", path=case_path)
+    for metric, threshold in expected.items():
+        require_string(metric, "$.expected.<metric>", path=case_path, max_chars=256)
+        require_number(threshold, f"$.expected.{metric}", path=case_path, minimum=0.0, maximum=1.0)
     failures: list[dict] = []
     warnings: list[str] = []
 
@@ -95,7 +105,7 @@ def eval_case(case_dir: Path, policy: Policy, baseline: dict) -> dict:
         }
 
     n = _protected_runs(policy)  # P3/P19
-    runs = [_one_run(case_dir, case.get("task", ""), policy) for _ in range(n)]
+    runs = [_one_run(case_dir, task, policy) for _ in range(n)]
     agg = metrics.aggregate_window(runs)["metrics"]
 
     # P3 stability: protected metric spread must stay within tolerance.
@@ -117,7 +127,7 @@ def eval_case(case_dir: Path, policy: Policy, baseline: dict) -> dict:
             )
 
     # threshold + baseline gating (P15/P21)
-    for metric, threshold in case.get("expected", {}).items():
+    for metric, threshold in expected.items():
         actual = agg.get(metric, 0.0)
         base = baseline.get(metric)
         if actual + 1e-9 < threshold:
@@ -177,6 +187,7 @@ def eval_suite(golden_dir: Path, policy: Policy, baseline: dict) -> dict:
     ``passed=False`` with an explicit failure record instead of a green eval.
     """
     golden_dir = Path(golden_dir)
+    validate_baseline(baseline)
     panel_count = (
         len([s for s in policy.stages if s["role"] != "judge"])
         if policy.uses_staged_orchestration else len(policy.panel_sources)

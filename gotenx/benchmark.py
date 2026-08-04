@@ -9,6 +9,10 @@ from pathlib import Path
 from .llm import Transport, extract_json_object
 from .orchestrator import run_staged
 from .usage import budget_status
+from .validation import (
+    read_json, require_int, require_list, require_number, require_object, require_string,
+    validate_benchmark_checkpoint,
+)
 
 
 LANGUAGES = {"python", "typescript", "go", "rust", "swift", "moonbit"}
@@ -38,11 +42,8 @@ def _nonempty_text(value: object, field: str, case_id: object, *, required: bool
 
 
 def load_suite(path: str | Path, expected_cases: int = 60) -> dict:
-    import json
-
-    suite = json.loads((Path(path) / "manifest.json").read_text())
-    if not isinstance(suite, dict):
-        raise ValueError("benchmark manifest root must be an object")
+    manifest_path = Path(path) / "manifest.json"
+    suite = require_object(read_json(manifest_path), path=manifest_path)
     cases = suite.get("cases", [])
     if not isinstance(cases, list):
         raise ValueError("benchmark manifest cases must be a list")
@@ -225,39 +226,66 @@ def run_case(
     }
 
 
-def _case_cost(case: dict) -> dict[str, float]:
+def _case_cost(case: dict, index: int = 0) -> dict[str, float]:
+    field = f"$.cases[{index}]"
     explicit = case.get("cost")
-    if isinstance(explicit, dict):
-        candidate = float(explicit.get("candidate_usd", 0.0))
-        baseline = float(explicit.get("baseline_usd", 0.0))
-        grader = float(explicit.get("grader_usd", 0.0))
-        total = float(explicit.get("total_usd", candidate + baseline + grader))
+    if explicit is not None:
+        explicit = require_object(explicit, f"{field}.cost")
+        candidate = require_number(explicit.get("candidate_usd", 0.0), f"{field}.cost.candidate_usd", minimum=0.0)
+        baseline = require_number(explicit.get("baseline_usd", 0.0), f"{field}.cost.baseline_usd", minimum=0.0)
+        grader = require_number(explicit.get("grader_usd", 0.0), f"{field}.cost.grader_usd", minimum=0.0)
+        total = require_number(explicit.get("total_usd", candidate + baseline + grader), f"{field}.cost.total_usd", minimum=0.0)
+        if abs(total - (candidate + baseline + grader)) > 1e-9:
+            raise ValueError(f"{field}.cost.total_usd must equal the component sum")
         return {"candidate": candidate, "baseline": baseline, "grader": grader, "total": total}
-    candidate = float(case["candidate"]["usage"].get("cost_usd", 0.0))
-    baseline = sum(float(b["usage"].get("cost_usd", 0.0)) for b in case.get("baselines", []))
-    grader = sum(float(g.get("usage", {}).get("cost_usd", 0.0)) for g in case.get("grades", []))
+    candidate_obj = require_object(case.get("candidate"), f"{field}.candidate")
+    candidate_usage = require_object(candidate_obj.get("usage"), f"{field}.candidate.usage")
+    candidate = require_number(candidate_usage.get("cost_usd"), f"{field}.candidate.usage.cost_usd", minimum=0.0)
+    baselines = require_list(case.get("baselines", []), f"{field}.baselines")
+    baseline = 0.0
+    for bindex, raw in enumerate(baselines):
+        item = require_object(raw, f"{field}.baselines[{bindex}]")
+        usage = require_object(item.get("usage"), f"{field}.baselines[{bindex}].usage")
+        baseline += require_number(usage.get("cost_usd"), f"{field}.baselines[{bindex}].usage.cost_usd", minimum=0.0)
+    grades = require_list(case.get("grades", []), f"{field}.grades")
+    grader = 0.0
+    for gindex, raw in enumerate(grades):
+        item = require_object(raw, f"{field}.grades[{gindex}]")
+        usage = item.get("usage")
+        if usage is not None:
+            usage = require_object(usage, f"{field}.grades[{gindex}].usage")
+            grader += require_number(usage.get("cost_usd", 0.0), f"{field}.grades[{gindex}].usage.cost_usd", minimum=0.0)
     return {"candidate": candidate, "baseline": baseline, "grader": grader, "total": candidate + baseline + grader}
 
 
 def report(results: dict, cfg: dict) -> dict:
-    cases = results.get("cases", [])
-    if not isinstance(cases, list) or not cases:
-        raise ValueError("benchmark has no completed cases")
-    if any(not isinstance(case, dict) or not case.get("grades") for case in cases):
-        raise ValueError("every benchmark case requires at least one grade")
-    scores = [sum(g["score"] for g in case["grades"]) / len(case["grades"]) for case in cases]
-    rng = random.Random(int(cfg.get("seed", 20260618)))
-    samples = int(cfg.get("bootstrap_samples", 10000))
+    results = validate_benchmark_checkpoint(results, require_cases=True)
+    cfg = require_object(cfg, "$.config")
+    cases = results["cases"]
+    scores = []
+    for cindex, case in enumerate(cases):
+        grades = require_list(case.get("grades", []), f"$.cases[{cindex}].grades")
+        if not grades:
+            raise ValueError("every benchmark case requires at least one grade")
+        values = []
+        for gindex, raw in enumerate(grades):
+            grade = require_object(raw, f"$.cases[{cindex}].grades[{gindex}]")
+            values.append(require_number(grade.get("score"), f"$.cases[{cindex}].grades[{gindex}].score", minimum=0.0, maximum=1.0))
+        scores.append(sum(values) / len(values))
+    seed = require_int(cfg.get("seed", 20260618), "$.config.seed", minimum=0)
+    rng = random.Random(seed)
+    samples = require_int(cfg.get("bootstrap_samples", 10000), "$.config.bootstrap_samples", minimum=1, maximum=1_000_000)
     means = []
     for _ in range(samples):
         draw = [scores[rng.randrange(len(scores))] for _ in scores]
         means.append(sum(draw) / len(draw))
     means.sort()
-    confidence = float(cfg.get("confidence", 0.95))
+    confidence = require_number(cfg.get("confidence", 0.95), "$.config.confidence", minimum=0.0, maximum=1.0)
     lower = means[max(0, int((1.0 - confidence) * samples) - 1)]
-    threshold = 0.5 - float(cfg.get("noninferiority_margin", 0.10))
+    margin = require_number(cfg.get("noninferiority_margin", 0.10), "$.config.noninferiority_margin", minimum=0.0, maximum=1.0)
+    threshold = 0.5 - margin
 
-    costs = [_case_cost(case) for case in cases]
+    costs = [_case_cost(case, index) for index, case in enumerate(cases)]
     candidate_cost = sum(cost["candidate"] for cost in costs)
     baseline_total = sum(cost["baseline"] for cost in costs)
     grader_cost = sum(cost["grader"] for cost in costs)
@@ -268,8 +296,8 @@ def report(results: dict, cfg: dict) -> dict:
         if case.get("baselines")
     )
     ratio = candidate_cost / baseline_mean_cost if baseline_mean_cost else float("inf")
-    max_ratio = float(cfg.get("max_baseline_ratio", 0.65))
-    expected_cases = int(cfg.get("cases", len(cases)))
+    max_ratio = require_number(cfg.get("max_baseline_ratio", 0.65), "$.config.max_baseline_ratio", minimum=0.0)
+    expected_cases = require_int(cfg.get("cases", len(cases)), "$.config.cases", minimum=1)
     complete = len(cases) == expected_cases
     quality_passed = lower >= threshold
     cost_passed = ratio <= max_ratio

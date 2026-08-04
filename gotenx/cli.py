@@ -29,6 +29,10 @@ from .panel import run_panel
 from .provenance import build_graph
 from . import usage as usage_mod
 from . import benchmark as benchmark_mod
+from .validation import (
+    DataValidationError, validate_baseline, validate_benchmark_checkpoint,
+    validate_proposal,
+)
 
 
 def plugin_root() -> Path:
@@ -62,35 +66,40 @@ def _required_adapter_sources(policy) -> list[str]:
 def _load_applied() -> dict:
     p = store.policy_path()
     if not p.exists():
-        raise SystemExit("no applied policy; run `gotenx init` first")
+        raise DataValidationError("run `gotenx init` first", path=p, code="missing_state")
     applied = store.read_json(p)
     if applied.get("schema_version") == policy_mod.LEGACY_SCHEMA_VERSION:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup = store.migrations_dir() / f"v2-to-v3-{stamp}"
-        store.write_json(backup / "policy.json", applied)
-        old_baseline = _load_baseline()
-        store.write_json(backup / "baseline.json", old_baseline)
-        template = json.loads(template_policy_path().read_text())
-        applied = policy_mod.migrate_v2_dict(applied, template)
-        applied["_baseline_pending"] = True
-        store.write_json_atomic(p, applied)
-        store.write_json_atomic(store.baseline_path(), {})
+        with store.file_lock("policy-migration"):
+            applied = store.read_json(p)
+            if applied.get("schema_version") == policy_mod.LEGACY_SCHEMA_VERSION:
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                backup = store.migrations_dir() / f"v2-to-v3-{stamp}"
+                store.write_json(backup / "policy.json", applied)
+                old_baseline = _load_baseline()
+                store.write_json(backup / "baseline.json", old_baseline)
+                template = json.loads(template_policy_path().read_text())
+                applied = policy_mod.migrate_v2_dict(applied, template)
+                applied["_baseline_pending"] = True
+                store.write_json_atomic(p, applied)
+                store.write_json_atomic(store.baseline_path(), {})
+    policy_mod.from_dict(applied, path=p)
     return applied
 
 
 def _load_baseline() -> dict:
     p = store.baseline_path()
-    return store.read_json(p) if p.exists() else {}
+    value = store.read_json(p) if p.exists() else {}
+    return validate_baseline(value, path=p)
 
 
 def _emit(result: dict, summary: str) -> None:
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
     print(summary, file=sys.stderr)
 
 
 # -- subcommands ----------------------------------------------------------
 
-def cmd_init(args: argparse.Namespace) -> int:
+def _cmd_init_locked(args: argparse.Namespace) -> int:
     store.ensure_layout()
     dst = store.policy_path()
     created = False
@@ -118,6 +127,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    with store.file_lock("policy-state"):
+        return _cmd_init_locked(args)
+
+
 def _resolve_task(args: argparse.Namespace) -> str:
     """Positional TASK words or --task; the explicit flag wins (issue #3)."""
     if args.task is not None:
@@ -127,11 +141,8 @@ def _resolve_task(args: argparse.Namespace) -> str:
     if not task.strip() and getattr(args, "replay", None):
         case_path = Path(args.replay) / "case.json"
         if case_path.exists():
-            try:
-                case = json.loads(case_path.read_text())
-            except (OSError, json.JSONDecodeError):
-                case = {}
-            replay_task = case.get("task") if isinstance(case, dict) else None
+            case = store.read_json(case_path)
+            replay_task = case.get("task")
             if isinstance(replay_task, str):
                 task = replay_task
     return task
@@ -147,14 +158,7 @@ def _validate_task(task: object) -> str:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     policy = policy_mod.from_dict(_load_applied())
-    try:
-        adapters = _load_adapters()
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        _emit(
-            {"ok": False, "error": {"code": "invalid_adapter_config", "message": str(exc)}},
-            f"doctor FAILED: {exc}",
-        )
-        return 2
+    adapters = _load_adapters()
     result = doctor_adapters(adapters, _required_adapter_sources(policy), cwd=store.project_root())
     _emit(result, f"doctor {'PASSED' if result['ok'] else 'FAILED'}")
     return 0 if result["ok"] else 2
@@ -174,14 +178,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         transport = Transport(mode="replay", replay_dir=Path(args.replay))
         mode = "replay"
     else:
-        try:
-            adapters = _load_adapters()
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            _emit(
-                {"error": {"code": "invalid_adapter_config", "message": str(exc)}},
-                f"run rejected: {exc}",
-            )
-            return 2
+        adapters = _load_adapters()
         preflight = doctor_adapters(adapters, _required_adapter_sources(policy), cwd=store.project_root())
         if not preflight["ok"]:
             _emit(
@@ -286,7 +283,8 @@ def cmd_propose(args: argparse.Namespace) -> int:
         return 2
     policy = policy_mod.from_dict(applied)
     baseline = _load_baseline()
-    proposal = store.read_json(Path(args.proposal))
+    proposal_path = Path(args.proposal)
+    proposal = validate_proposal(store.read_json(proposal_path), path=proposal_path)
     golden = Path(args.golden or (plugin_root() / "golden"))
 
     verdict = proposal_mod.validate(proposal, policy)
@@ -317,7 +315,7 @@ def _measured_floor(eval_result: dict, policy: policy_mod.Policy) -> dict:
     return measured
 
 
-def cmd_apply(args: argparse.Namespace) -> int:
+def _cmd_apply_locked(args: argparse.Namespace) -> int:
     applied = _load_applied()
     if applied.get("_baseline_pending"):
         _emit({"applied": False, "reason": "v3_baseline_pending"},
@@ -325,7 +323,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
         return 2
     policy = policy_mod.from_dict(applied)
     baseline = _load_baseline()
-    proposal = store.read_json(Path(args.proposal))
+    proposal_path = Path(args.proposal)
+    proposal = validate_proposal(store.read_json(proposal_path), path=proposal_path)
     golden = Path(args.golden or (plugin_root() / "golden"))
 
     verdict = proposal_mod.validate(proposal, policy)
@@ -368,6 +367,11 @@ def cmd_apply(args: argparse.Namespace) -> int:
         f"baseline ratcheted",
     )
     return 0
+
+
+def cmd_apply(args: argparse.Namespace) -> int:
+    with store.file_lock("policy-state"):
+        return _cmd_apply_locked(args)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -414,6 +418,7 @@ def cmd_benchmark_run(args: argparse.Namespace) -> int:
     suite = benchmark_mod.load_suite(suite_dir, int(policy.benchmark_cfg.get("cases", 60)))
     out_path = Path(args.output or (store.gotenx_dir() / "benchmarks" / "v1-results.json"))
     result = store.read_json(out_path) if out_path.exists() and args.resume else {"suite": suite.get("id", "v1"), "cases": []}
+    result = validate_benchmark_checkpoint(result, path=out_path)
     done = {case["id"] for case in result["cases"]}
     transport = Transport(mode="real", cwd=store.project_root())
     for case in suite["cases"]:
@@ -442,16 +447,19 @@ def cmd_benchmark_run(args: argparse.Namespace) -> int:
     result["report"] = summary
     store.write_json_atomic(out_path, result)
     if summary["passed"]:
-        applied.pop("_baseline_pending", None)
-        applied["_benchmark_baseline"] = summary
-        store.write_json_atomic(store.policy_path(), applied)
+        with store.file_lock("policy-state"):
+            current = _load_applied()
+            current.pop("_baseline_pending", None)
+            current["_benchmark_baseline"] = summary
+            store.write_json_atomic(store.policy_path(), current)
     _emit(summary, f"benchmark {'PASSED' if summary['passed'] else 'FAILED'}: quality={summary['quality']['lower_confidence_bound']:.3f} cost_ratio={summary['cost']['ratio']:.3f}")
     return 0 if summary["passed"] else 2
 
 
 def cmd_benchmark_report(args: argparse.Namespace) -> int:
     policy = policy_mod.from_dict(_load_applied())
-    result = store.read_json(Path(args.results))
+    results_path = Path(args.results)
+    result = validate_benchmark_checkpoint(store.read_json(results_path), path=results_path, require_cases=True)
     summary = benchmark_mod.report(result, _benchmark_cfg(policy))
     _emit(summary, f"benchmark {'PASSED' if summary['passed'] else 'FAILED'}: quality={summary['quality']['lower_confidence_bound']:.3f} cost_ratio={summary['cost']['ratio']:.3f}")
     return 0 if summary["passed"] else 2
@@ -509,7 +517,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except DataValidationError as exc:
+        _emit({"ok": False, "error": exc.as_dict()}, f"{args.command} failed: {exc}")
+        return 2
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        error = DataValidationError(str(exc), code="invalid_data")
+        _emit({"ok": False, "error": error.as_dict()}, f"{args.command} failed: {exc}")
+        return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

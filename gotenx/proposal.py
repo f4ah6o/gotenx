@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .policy import INVARIANT_NO_PROMOTION, Policy
+from .validation import validate_proposal
 
 ACCEPTED = "accepted"
 REJECTED = "rejected"
@@ -62,6 +63,7 @@ def _promotes_future_candidate(changes: dict, policy: Policy) -> str | None:
 
 def validate(proposal: dict, policy: Policy) -> ValidationResult:
     """Run the P17/P22 validation stage against the currently applied policy."""
+    proposal = validate_proposal(proposal)
     changes = proposal.get("changes", {})
     if not changes:
         return ValidationResult(REJECTED, "empty_changes")

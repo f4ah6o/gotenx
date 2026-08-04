@@ -1,6 +1,6 @@
 # Gotenx — Codex / Claude Code プラグイン + CLI
 
-> **Gotenx v1.4** · Codex対応、運用診断、課金・解析境界の堅牢化
+> **Gotenx v1.5** · Codex対応、トランザクション永続化、厳格な状態検証
 
 **Gotenx は「複数の AI に意見を出させ、1 つの計画にまとめ、その計画が元の意見を
 ちゃんと使っているかを“ごまかせない指標”で測る」ためのパイプラインです。**
@@ -14,6 +14,17 @@ Codex と Claude Code のプラグイン、および単体CLIとして動きま�
 - 💰 v1.3 ではコスト予算ガードレールと品質/コストの非劣性ベンチマークが加わる
 
 ---
+
+## v1.5 で追加されたもの
+
+- **並行実行安全性** — run IDを原子的に予約し、所有プロセス以外からの公開を拒否。usage ledgerはLinux/macOSの`flock`で直列化。
+- **トランザクションrun公開** — 全成果物を隠し一時ディレクトリへ書き、完成後に`.gotenx/runs/<run_id>/`へ原子的に公開。読者は部分runを観測しない。
+- **全JSON書き込みの原子化** — policy、baseline、migration、benchmark checkpoint、ledgerをfsync後に置換。
+- **厳格な状態検証** — policy、baseline、adapter、ledger、proposal、benchmark、replay fixture、model item、run artifactを利用前に検証。
+- **修復可能なCLIエラー** — 破損状態は`code`、`field`、`path`、`message`、`hint`を持つJSONとして返し、tracebackを外部契約にしない。
+- **非有限値とbool-as-numberの拒否** — `NaN`、Infinity、負の費用、不正timestamp、数値欄のbooleanをfail closedで拒否。
+
+詳細は[`docs/patch5.md`](docs/patch5.md)を参照。
 
 ## v1.4 で追加されたもの
 
@@ -253,20 +264,20 @@ agents/gotenx-judge.md        Judge サブエージェント(来歴に忠実な�
 hooks/hooks.json              PostToolUse フック(policy.json 編集時に検証)
 bin/gotenx                    決定的な CLI 本体
 bin/gotenx-validate-policy    フック本体:編集された policy.json を検証
-gotenx/                       Python パッケージ(ids, provenance, metrics, eval, orchestrator, benchmark …)
+gotenx/                       Python パッケージ(ids, provenance, metrics, validation, store, benchmark …)
 config/policy.json            正準ポリシー(schema: gotenx.config.policy.v3)
 config/adapters.json          Claude/Codex/OpenCodeの正準CLIアダプター
 benchmarks/v1/sources.json    固定の public PR ベンチマークソース
 scripts/build_benchmark_suite.py  30 public + 30 合成ケースを構築
 golden/case-*/                検証用のゴールデンケース(再生フィクスチャ)
 examples/*.json                サンプル提案(受理 / 却下)
-docs/                          仕様(spec.md と patch1-3.md)
+docs/                          仕様(spec.md と patch1-5.md)
 tests/                         unittest スイート
 ```
 
 利用先プロジェクトの **実行時の状態**は `<project>/.gotenx/` に置かれます
 (適用済み `policy.json`、`adapters.json`、`baseline.json`、使用量台帳、ベンチマークのチェックポイント、
-`runs/<run_id>/`、`proposals/`)。既存の v2 状態は v3 への自動移行前に `.gotenx/migrations/`
+`runs/<run_id>/`、`run-reservations/`、`locks/`、`proposals/`)。予約と一時runは公開対象外で、完成したrunのみ`runs/`に原子的に現れます。既存の v2 状態は v3 への自動移行前に `.gotenx/migrations/`
 にバックアップされる。このプラグインのリポジトリ自体には書き込みません。
 
 ---
@@ -296,6 +307,7 @@ Gotenx は **仕様 v1.2「Frozen Baseline」**(凍結ベースライン、P1–
 - [`docs/patch2.md`](docs/patch2.md) — P9–P21
 - [`docs/patch3.md`](docs/patch3.md) — 凍結デルタ
 - [`docs/patch4.md`](docs/patch4.md) — Codex対応・アダプター診断・課金/解析境界の堅牢化
+- [`docs/patch5.md`](docs/patch5.md) — 並行実行安全性・トランザクション永続化・厳格な状態検証
 
 ### 既知の未解決項目(持ち越し、ブロッカーではない)
 

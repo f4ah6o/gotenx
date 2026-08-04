@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .validation import DataValidationError, read_json, require_object
+
 MAX_MODEL_OUTPUT_CHARS = 1_000_000
 MAX_JSON_SCAN_STARTS = 10_000
 
@@ -110,13 +112,14 @@ def merge_adapters(overrides: dict | None = None) -> dict[str, dict[str, Any]]:
 
 def load_adapters(path: str | Path) -> dict[str, dict[str, Any]]:
     """Load `.gotenx/adapters.json`, preserving defaults for omitted adapters."""
-    data = json.loads(Path(path).read_text())
-    if not isinstance(data, dict):
-        raise ValueError("adapter config root must be an object")
+    data = require_object(read_json(path), path=path)
     schema = data.get("schema_version")
     if schema not in {None, "gotenx.adapters.v1"}:
         raise ValueError(f"unsupported adapters schema_version {schema!r}")
-    return merge_adapters(data.get("adapters", {}))
+    try:
+        return merge_adapters(data.get("adapters", {}))
+    except ValueError as exc:
+        raise DataValidationError(str(exc), field="$.adapters", path=path) from exc
 
 
 def _render_argv(argv: list[str], *, prompt: str, cwd: Path | None) -> list[str]:
@@ -195,7 +198,7 @@ class Transport:
         if self.mode == "replay":
             raw = self._replay(f"stages/{stage['id']}")
             usage_path = Path(self.replay_dir or ".") / "stages" / f"{stage['id']}.usage.json"
-            usage = json.loads(usage_path.read_text()) if usage_path.exists() else {}
+            usage = require_object(read_json(usage_path), path=usage_path) if usage_path.exists() else {}
             return ModelResult(text=raw, usage=usage, raw_events=[])
 
         argv = [
@@ -254,9 +257,15 @@ class Transport:
         if not path.exists():
             jpath = Path(self.replay_dir) / f"{slot}.json"
             if jpath.exists():
-                return jpath.read_text()
+                text = jpath.read_text()
+                if len(text) > MAX_MODEL_OUTPUT_CHARS:
+                    raise ValueError(f"replay fixture exceeds {MAX_MODEL_OUTPUT_CHARS} characters: {jpath}")
+                return text
             raise FileNotFoundError(f"no replay fixture for {slot!r}: {path}")
-        return path.read_text()
+        text = path.read_text()
+        if len(text) > MAX_MODEL_OUTPUT_CHARS:
+            raise ValueError(f"replay fixture exceeds {MAX_MODEL_OUTPUT_CHARS} characters: {path}")
+        return text
 
     def _real(self, source: str, prompt: str) -> InvokeResult:
         adapter = self.adapters.get(source)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Gotenx v1.4 is a Codex / Claude Code **plugin and CLI** implementing a deterministic
+Gotenx v1.5 is a Codex / Claude Code **plugin and CLI** implementing a deterministic
 Panel → Judge → Eval → Proposal pipeline. Codex uses `.codex-plugin/plugin.json`
 and `skills/gotenx/SKILL.md`; Claude Code uses `.claude-plugin/plugin.json`,
 `commands/*.md`, `agents/`, and `hooks/`. Both surfaces wrap the same stdlib-only

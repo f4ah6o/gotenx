@@ -2,7 +2,7 @@
 
 ## Product
 
-Gotenx v1.4 is a stdlib-only Python CLI plus Codex and Claude Code plugin assets. It runs a provenance-backed Panel → Judge → Eval → Proposal workflow with budget and benchmark guardrails.
+Gotenx v1.5 is a stdlib-only Python CLI plus Codex and Claude Code plugin assets. It runs a provenance-backed Panel → Judge → Eval → Proposal workflow with budget and benchmark guardrails.
 
 Read `README.md` before changing behavior. Preserve the frozen v1.2 provenance invariants and the v1.3 staged-pipeline guarantees.
 

@@ -24,11 +24,17 @@ jobs:
           import json, pathlib
           paths = [
               pathlib.Path('.claude-plugin/plugin.json'),
+              pathlib.Path('.codex-plugin/plugin.json'),
               pathlib.Path('hooks/hooks.json'),
               *sorted(pathlib.Path('config').glob('*.json')),
+              *sorted(pathlib.Path('examples').glob('*.json')),
+              *sorted(pathlib.Path('golden').glob('case-*/*.json')),
+              *sorted(pathlib.Path('benchmarks').glob('**/*.json')),
           ]
+          def reject(value):
+              raise ValueError(f'non-finite JSON number: {value}')
           for p in paths:
-              json.loads(p.read_text())
+              json.loads(p.read_text(), parse_constant=reject)
               print('valid:', p)
           "
 
