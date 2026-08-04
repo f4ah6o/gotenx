@@ -180,6 +180,7 @@ class TestUsagePersistence(unittest.TestCase):
                     "warnings": [],
                     "usage": {"output_tokens": 2},
                 }), \
+                patch("gotenx.cli.doctor_adapters", return_value={"ok": True, "adapters": []}), \
                 patch("gotenx.cli._emit"):
                 cli.cmd_run(Namespace(replay=None, task="t", human_override=False))
             run_id = store.list_runs(root)[0]
