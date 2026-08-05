@@ -115,7 +115,21 @@
     "baseline_models": [
       {"id": "github-copilot/claude-opus-4.6", "variant": "high"},
       {"id": "github-copilot/gpt-5.5", "variant": "high"}
-    ]
+    ],
+    "capability_floor": {
+      "dimension_mean_min": {
+        "correctness": 3.25,
+        "coverage": 3.0,
+        "actionability": 3.0,
+        "risk_testing": 2.75,
+        "concision": 2.5
+      },
+      "case_mean_min": 2.75,
+      "case_correctness_min": 2.5,
+      "min_case_pass_rate": 0.9,
+      "max_critical_failure_rate": 0.05,
+      "critical_failure_votes_required": 2
+    }
   },
 
   "eval": {

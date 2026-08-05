@@ -207,11 +207,28 @@ def validate_benchmark_checkpoint(value: Any, *, path=None, require_cases: bool 
         if not grades:
             raise DataValidationError("must not be empty", field=f"{field}.grades", path=path)
         for gindex, grade in enumerate(grades):
-            item = require_object(grade, f"{field}.grades[{gindex}]", path=path)
-            require_number(item.get("score"), f"{field}.grades[{gindex}].score", path=path, minimum=0.0, maximum=1.0)
+            grade_field = f"{field}.grades[{gindex}]"
+            item = require_object(grade, grade_field, path=path)
+            require_number(item.get("score"), f"{grade_field}.score", path=path, minimum=0.0, maximum=1.0)
+            for score_name in ("candidate_scores", "baseline_scores"):
+                if item.get(score_name) is None:
+                    continue
+                score_obj = require_object(item[score_name], f"{grade_field}.{score_name}", path=path)
+                for dimension in ("correctness", "coverage", "actionability", "risk_testing", "concision"):
+                    require_number(score_obj.get(dimension), f"{grade_field}.{score_name}.{dimension}",
+                                   path=path, minimum=1.0, maximum=5.0)
+            if "critical_failure" in item:
+                require_bool(item["critical_failure"], f"{grade_field}.critical_failure", path=path)
+            for failure_name in ("candidate_critical_failures", "baseline_critical_failures"):
+                if item.get(failure_name) is not None:
+                    failures = require_string_list(item[failure_name], f"{grade_field}.{failure_name}",
+                                                   path=path)
+                    if len(failures) > 32:
+                        raise DataValidationError("must contain at most 32 items",
+                                                  field=f"{grade_field}.{failure_name}", path=path)
             if item.get("usage") is not None:
-                item_usage = require_object(item["usage"], f"{field}.grades[{gindex}].usage", path=path)
-                require_number(item_usage.get("cost_usd", 0.0), f"{field}.grades[{gindex}].usage.cost_usd", path=path, minimum=0.0)
+                item_usage = require_object(item["usage"], f"{grade_field}.usage", path=path)
+                require_number(item_usage.get("cost_usd", 0.0), f"{grade_field}.usage.cost_usd", path=path, minimum=0.0)
         if case.get("cost") is not None:
             cost = require_object(case["cost"], f"{field}.cost", path=path)
             for name in ("candidate_usd", "baseline_usd", "grader_usd", "total_usd"):

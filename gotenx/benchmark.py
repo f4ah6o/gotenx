@@ -94,11 +94,42 @@ def _grade_prompt(case: dict, candidate: str, baseline: str, candidate_first: bo
     a, b = (candidate, baseline) if candidate_first else (baseline, candidate)
     return (
         "Blindly compare responses A and B for correctness, coverage, actionability, "
-        "risk/testing quality, and concision. Return ONLY JSON with preference "
-        "('A', 'B', or 'tie'), reason, and scores containing numeric 1-5 keys "
-        "correctness, coverage, actionability, risk_testing, and concision.\n\n"
+        "risk/testing quality, and concision. Score EACH response independently. "
+        "Return ONLY JSON with: preference ('A', 'B', or 'tie'); reason; scores, "
+        "an object whose A and B values each contain numeric 1-5 keys correctness, "
+        "coverage, actionability, risk_testing, and concision; and critical_failures, "
+        "an object whose A and B values are lists of short failure codes. A critical "
+        "failure means a materially wrong central conclusion, a missed explicit blocker "
+        "that makes the answer unsafe or unusable, violation of a hard task constraint, "
+        "or a destructive/security-risky recommendation without a required guard. "
+        "Do not flag minor omissions or style issues as critical.\n\n"
         f"TASK:\n{case['task']}\n\nA:\n{a}\n\nB:\n{b}"
     )
+
+
+def _rubric_scores(value: object, label: str) -> dict[str, float]:
+    if not isinstance(value, dict) or not GRADE_DIMENSIONS.issubset(value):
+        raise ValueError(f"grader omitted required rubric scores for {label}")
+    scores: dict[str, float] = {}
+    for key in GRADE_DIMENSIONS:
+        raw = value[key]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not 1 <= raw <= 5:
+            raise ValueError(f"grader {label} rubric scores must be numeric values from 1 to 5")
+        scores[key] = float(raw)
+    return scores
+
+
+def _critical_failures(value: object, label: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"grader critical_failures.{label} must be a list")
+    if len(value) > 32:
+        raise ValueError(f"grader critical_failures.{label} exceeds 32 items")
+    failures = []
+    for raw in value:
+        if not isinstance(raw, str) or not raw.strip() or len(raw) > 256:
+            raise ValueError(f"grader critical_failures.{label} items must be non-empty strings up to 256 chars")
+        failures.append(raw.strip())
+    return failures
 
 
 def _json_object(text: str) -> dict:
@@ -194,21 +225,31 @@ def run_case(
             preference = preference.upper()
         if preference not in {"A", "B", "tie"}:
             raise ValueError(f"grader returned invalid preference {preference!r}")
-        scores = verdict.get("scores")
-        if not isinstance(scores, dict) or not GRADE_DIMENSIONS.issubset(scores):
-            raise ValueError("grader omitted required rubric scores")
-        if any(
-            isinstance(scores[key], bool) or not isinstance(scores[key], (int, float)) or not 1 <= scores[key] <= 5
-            for key in GRADE_DIMENSIONS
-        ):
-            raise ValueError("grader rubric scores must be numeric values from 1 to 5")
+        score_sets = verdict.get("scores")
+        if not isinstance(score_sets, dict):
+            raise ValueError("grader scores must contain A and B score objects")
+        scores_a = _rubric_scores(score_sets.get("A"), "A")
+        scores_b = _rubric_scores(score_sets.get("B"), "B")
+        failure_sets = verdict.get("critical_failures")
+        if not isinstance(failure_sets, dict):
+            raise ValueError("grader critical_failures must contain A and B lists")
+        failures_a = _critical_failures(failure_sets.get("A"), "A")
+        failures_b = _critical_failures(failure_sets.get("B"), "B")
         candidate_label = "A" if candidate_first else "B"
         score = 0.5 if preference == "tie" else (1.0 if preference == candidate_label else 0.0)
+        candidate_scores = scores_a if candidate_label == "A" else scores_b
+        baseline_scores = scores_b if candidate_label == "A" else scores_a
+        candidate_failures = failures_a if candidate_label == "A" else failures_b
+        baseline_failures = failures_b if candidate_label == "A" else failures_a
         grader_cost += cost
         accrued += cost
         grades.append({
             "grader": grader_spec["id"], "baseline": baseline["model"],
-            "candidate_first": candidate_first, "score": score, "verdict": verdict,
+            "candidate_first": candidate_first, "score": score,
+            "candidate_scores": candidate_scores, "baseline_scores": baseline_scores,
+            "candidate_critical_failures": candidate_failures,
+            "baseline_critical_failures": baseline_failures,
+            "critical_failure": bool(candidate_failures), "verdict": verdict,
             "usage": result.usage, "cost_usd": cost,
         })
     total_cost = candidate_cost + baseline_cost + grader_cost
@@ -258,6 +299,124 @@ def _case_cost(case: dict, index: int = 0) -> dict[str, float]:
     return {"candidate": candidate, "baseline": baseline, "grader": grader, "total": candidate + baseline + grader}
 
 
+def _capability_floor(cases: list[dict], cfg: dict) -> dict:
+    floor_cfg = cfg.get("capability_floor")
+    if floor_cfg is None:
+        return {"enabled": False, "measured": False, "passed": True}
+    floor_cfg = require_object(floor_cfg, "$.config.capability_floor")
+    dimension_min_raw = require_object(
+        floor_cfg.get("dimension_mean_min", {}),
+        "$.config.capability_floor.dimension_mean_min",
+    )
+    dimension_min = {
+        key: require_number(
+            dimension_min_raw.get(key, 1.0),
+            f"$.config.capability_floor.dimension_mean_min.{key}",
+            minimum=1.0, maximum=5.0,
+        )
+        for key in GRADE_DIMENSIONS
+    }
+    case_mean_min = require_number(
+        floor_cfg.get("case_mean_min", 2.5),
+        "$.config.capability_floor.case_mean_min", minimum=1.0, maximum=5.0,
+    )
+    case_correctness_min = require_number(
+        floor_cfg.get("case_correctness_min", 2.5),
+        "$.config.capability_floor.case_correctness_min", minimum=1.0, maximum=5.0,
+    )
+    min_case_pass_rate = require_number(
+        floor_cfg.get("min_case_pass_rate", 0.90),
+        "$.config.capability_floor.min_case_pass_rate", minimum=0.0, maximum=1.0,
+    )
+    max_critical_failure_rate = require_number(
+        floor_cfg.get("max_critical_failure_rate", 0.05),
+        "$.config.capability_floor.max_critical_failure_rate", minimum=0.0, maximum=1.0,
+    )
+    votes_required = require_int(
+        floor_cfg.get("critical_failure_votes_required", 2),
+        "$.config.capability_floor.critical_failure_votes_required", minimum=1, maximum=16,
+    )
+
+    missing: list[dict] = []
+    case_results: list[dict] = []
+    for cindex, case in enumerate(cases):
+        grades = require_list(case.get("grades", []), f"$.cases[{cindex}].grades")
+        score_sets = []
+        critical_votes = 0
+        for gindex, raw in enumerate(grades):
+            grade = require_object(raw, f"$.cases[{cindex}].grades[{gindex}]")
+            raw_scores = grade.get("candidate_scores")
+            if raw_scores is None or "critical_failure" not in grade:
+                missing.append({"case": case.get("id"), "grader_index": gindex})
+                continue
+            score_sets.append(_rubric_scores(raw_scores, f"candidate case {case.get('id')!r}"))
+            if bool(grade.get("critical_failure")):
+                critical_votes += 1
+        if len(score_sets) != len(grades):
+            continue
+        dimensions = {
+            key: sum(scores[key] for scores in score_sets) / len(score_sets)
+            for key in GRADE_DIMENSIONS
+        }
+        case_mean = sum(dimensions.values()) / len(dimensions)
+        critical = critical_votes >= min(votes_required, len(grades))
+        passed = (
+            case_mean + 1e-9 >= case_mean_min
+            and dimensions["correctness"] + 1e-9 >= case_correctness_min
+            and not critical
+        )
+        case_results.append({
+            "id": case.get("id"), "passed": passed, "mean": case_mean,
+            "dimensions": dimensions, "critical_failure": critical,
+            "critical_failure_votes": critical_votes,
+        })
+
+    measured = not missing and len(case_results) == len(cases) and bool(cases)
+    if not measured:
+        return {
+            "enabled": True, "measured": False, "passed": False,
+            "reason": "absolute_scores_missing",
+            "missing": missing,
+            "cases": len(case_results), "expected_cases": len(cases),
+        }
+
+    dimension_means = {
+        key: sum(case["dimensions"][key] for case in case_results) / len(case_results)
+        for key in GRADE_DIMENSIONS
+    }
+    dimension_pass = {
+        key: dimension_means[key] + 1e-9 >= dimension_min[key]
+        for key in GRADE_DIMENSIONS
+    }
+    case_pass_rate = sum(1 for case in case_results if case["passed"]) / len(case_results)
+    critical_failure_rate = sum(1 for case in case_results if case["critical_failure"]) / len(case_results)
+    passed = (
+        all(dimension_pass.values())
+        and case_pass_rate + 1e-9 >= min_case_pass_rate
+        and critical_failure_rate <= max_critical_failure_rate + 1e-9
+    )
+    failed_cases = [
+        {"id": case["id"], "mean": case["mean"],
+         "correctness": case["dimensions"]["correctness"],
+         "critical_failure": case["critical_failure"]}
+        for case in case_results if not case["passed"]
+    ]
+    return {
+        "enabled": True, "measured": True, "passed": passed,
+        "dimension_means": dimension_means,
+        "dimension_thresholds": dimension_min,
+        "dimension_passed": dimension_pass,
+        "case_mean_min": case_mean_min,
+        "case_correctness_min": case_correctness_min,
+        "case_pass_rate": case_pass_rate,
+        "min_case_pass_rate": min_case_pass_rate,
+        "critical_failure_rate": critical_failure_rate,
+        "max_critical_failure_rate": max_critical_failure_rate,
+        "critical_failure_votes_required": votes_required,
+        "failed_cases": failed_cases,
+    }
+
+
 def report(results: dict, cfg: dict) -> dict:
     results = validate_benchmark_checkpoint(results, require_cases=True)
     cfg = require_object(cfg, "$.config")
@@ -301,12 +460,14 @@ def report(results: dict, cfg: dict) -> dict:
     complete = len(cases) == expected_cases
     quality_passed = lower >= threshold
     cost_passed = ratio <= max_ratio
+    capability_floor = _capability_floor(cases, cfg)
     return {
-        "passed": complete and quality_passed and cost_passed,
+        "passed": complete and quality_passed and capability_floor["passed"] and cost_passed,
         "quality": {
             "mean": sum(scores) / len(scores), "lower_confidence_bound": lower,
             "threshold": threshold, "passed": quality_passed,
         },
+        "capability_floor": capability_floor,
         "cost": {
             "candidate_usd": candidate_cost,
             "baseline_usd": baseline_total,

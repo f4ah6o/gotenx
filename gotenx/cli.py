@@ -452,7 +452,12 @@ def cmd_benchmark_run(args: argparse.Namespace) -> int:
             current.pop("_baseline_pending", None)
             current["_benchmark_baseline"] = summary
             store.write_json_atomic(store.policy_path(), current)
-    _emit(summary, f"benchmark {'PASSED' if summary['passed'] else 'FAILED'}: quality={summary['quality']['lower_confidence_bound']:.3f} cost_ratio={summary['cost']['ratio']:.3f}")
+    floor = summary["capability_floor"]
+    floor_text = (
+        f"floor={floor['case_pass_rate']:.3f}"
+        if floor.get("measured") else "floor=unmeasured"
+    )
+    _emit(summary, f"benchmark {'PASSED' if summary['passed'] else 'FAILED'}: quality={summary['quality']['lower_confidence_bound']:.3f} {floor_text} cost_ratio={summary['cost']['ratio']:.3f}")
     return 0 if summary["passed"] else 2
 
 
@@ -461,7 +466,12 @@ def cmd_benchmark_report(args: argparse.Namespace) -> int:
     results_path = Path(args.results)
     result = validate_benchmark_checkpoint(store.read_json(results_path), path=results_path, require_cases=True)
     summary = benchmark_mod.report(result, _benchmark_cfg(policy))
-    _emit(summary, f"benchmark {'PASSED' if summary['passed'] else 'FAILED'}: quality={summary['quality']['lower_confidence_bound']:.3f} cost_ratio={summary['cost']['ratio']:.3f}")
+    floor = summary["capability_floor"]
+    floor_text = (
+        f"floor={floor['case_pass_rate']:.3f}"
+        if floor.get("measured") else "floor=unmeasured"
+    )
+    _emit(summary, f"benchmark {'PASSED' if summary['passed'] else 'FAILED'}: quality={summary['quality']['lower_confidence_bound']:.3f} {floor_text} cost_ratio={summary['cost']['ratio']:.3f}")
     return 0 if summary["passed"] else 2
 
 

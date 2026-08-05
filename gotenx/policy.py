@@ -28,6 +28,20 @@ V3_MODELS = [
     "opencode-go/deepseek-v4-pro",
     "opencode-go/glm-5.2",
 ]
+DEFAULT_CAPABILITY_FLOOR = {
+    "dimension_mean_min": {
+        "correctness": 3.25,
+        "coverage": 3.0,
+        "actionability": 3.0,
+        "risk_testing": 2.75,
+        "concision": 2.5,
+    },
+    "case_mean_min": 2.75,
+    "case_correctness_min": 2.5,
+    "min_case_pass_rate": 0.90,
+    "max_critical_failure_rate": 0.05,
+    "critical_failure_votes_required": 2,
+}
 
 
 @dataclass(frozen=True)
@@ -84,7 +98,10 @@ class Policy:
 
     @property
     def benchmark_cfg(self) -> dict:
-        return dict(self.raw.get("benchmark", {}))
+        cfg = dict(self.raw.get("benchmark", {}))
+        if "capability_floor" not in cfg:
+            cfg["capability_floor"] = json.loads(json.dumps(DEFAULT_CAPABILITY_FLOOR))
+        return cfg
 
     def future_candidate_names(self) -> set[str]:
         return {m["name"] for m in self.future_candidate_metrics}
@@ -216,6 +233,33 @@ def from_dict(data: dict, *, path=None) -> Policy:
             if key in benchmark:
                 require_number(benchmark[key], f"$.benchmark.{key}", path=path,
                                minimum=0.0, maximum=1.0)
+        floor_present = "capability_floor" in benchmark
+        floor = require_object(benchmark.get("capability_floor", {}),
+                               "$.benchmark.capability_floor", path=path)
+        if floor_present and not floor:
+            raise DataValidationError("must not be empty",
+                                      field="$.benchmark.capability_floor", path=path)
+        if floor:
+            dimensions = require_object(floor.get("dimension_mean_min"),
+                                        "$.benchmark.capability_floor.dimension_mean_min", path=path)
+            expected_dimensions = {"correctness", "coverage", "actionability", "risk_testing", "concision"}
+            if set(dimensions) != expected_dimensions:
+                raise DataValidationError(
+                    f"must contain exactly {sorted(expected_dimensions)!r}",
+                    field="$.benchmark.capability_floor.dimension_mean_min", path=path,
+                )
+            for name, value in dimensions.items():
+                require_number(value, f"$.benchmark.capability_floor.dimension_mean_min.{name}",
+                               path=path, minimum=1.0, maximum=5.0)
+            for key in ("case_mean_min", "case_correctness_min"):
+                require_number(floor.get(key), f"$.benchmark.capability_floor.{key}",
+                               path=path, minimum=1.0, maximum=5.0)
+            for key in ("min_case_pass_rate", "max_critical_failure_rate"):
+                require_number(floor.get(key), f"$.benchmark.capability_floor.{key}",
+                               path=path, minimum=0.0, maximum=1.0)
+            votes = require_int(floor.get("critical_failure_votes_required"),
+                                "$.benchmark.capability_floor.critical_failure_votes_required",
+                                path=path, minimum=1, maximum=len(baselines))
         if "max_baseline_ratio" in cost_budget:
             require_number(cost_budget["max_baseline_ratio"],
                            "$.cost_budget.max_baseline_ratio", path=path, minimum=0.0)

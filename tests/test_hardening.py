@@ -175,7 +175,11 @@ class TestInputAndBenchmarkAccounting(unittest.TestCase):
         )
         grade = json.dumps({
             "preference": "tie", "reason": "equal",
-            "scores": {key: 4 for key in benchmark.GRADE_DIMENSIONS},
+            "scores": {
+                "A": {key: 4 for key in benchmark.GRADE_DIMENSIONS},
+                "B": {key: 4 for key in benchmark.GRADE_DIMENSIONS},
+            },
+            "critical_failures": {"A": [], "B": []},
         })
         transport = SequenceTransport([
             ModelResult("baseline a", {"cost_usd": 0.6}, []),
@@ -199,6 +203,8 @@ class TestInputAndBenchmarkAccounting(unittest.TestCase):
             ("candidate", 0.4), ("baseline:0", 0.6), ("baseline:1", 0.7),
             ("grader:0", 0.1), ("grader:1", 0.2),
         ])
+        self.assertEqual(result["grades"][0]["candidate_scores"]["correctness"], 4.0)
+        self.assertFalse(result["grades"][0]["critical_failure"])
         self.assertAlmostEqual(result["cost"]["candidate_usd"], 0.4)
         self.assertAlmostEqual(result["cost"]["baseline_usd"], 1.3)
         self.assertAlmostEqual(result["cost"]["grader_usd"], 0.3)

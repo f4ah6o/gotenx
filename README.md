@@ -251,6 +251,11 @@ GPT-5.5 high が候補 vs Opus を採点し、Opus 4.6 high が候補 vs GPT を
 決定的にランダム化される。固定シードの 10,000 サンプル bootstrap で、選定した 10 ポイントの
 非劣性マージンに対応する 95% 下側スコア境界 ≥0.40 を満たす必要がある。
 
+相対的な非劣性とは別に、`capability_floor` がコード計画・レビューに必要な最低能力を gate する。
+2つの grader が各回答を5軸で絶対採点し、軸別平均、ケース合格率、重大失敗率をすべて判定する。
+旧 checkpoint は絶対採点を持たないため fail closed となる。詳細は
+[`docs/minimum-capability-floor.md`](docs/minimum-capability-floor.md) を参照。
+
 ---
 
 ## ディレクトリ構成
